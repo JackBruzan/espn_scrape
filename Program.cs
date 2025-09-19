@@ -28,12 +28,21 @@ try
     // Configure cache settings
     builder.Services.Configure<CacheConfiguration>(builder.Configuration.GetSection("Cache"));
 
+    // Configure resilience settings
+    builder.Services.Configure<ResilienceConfiguration>(builder.Configuration.GetSection("Resilience"));
+
     // Register services
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
     builder.Services.AddSingleton<IESPNScrapingService, ESPNScrapingService>();
 
-    // Add HTTP client for ESPN service (retry logic is handled in EspnHttpService)
-    builder.Services.AddHttpClient<IEspnHttpService, EspnHttpService>();
+    // Register rate limiting service
+    builder.Services.AddSingleton<IEspnRateLimitService, EspnRateLimitService>();
+
+    // Add HTTP client for ESPN service with enhanced resilience
+    builder.Services.AddHttpClient<IEspnHttpService, EspnHttpService>(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(30); // Default timeout, will be overridden by resilience config
+    });
 
     // Register ESPN Scoreboard Service
     builder.Services.AddScoped<IEspnScoreboardService, EspnScoreboardService>();

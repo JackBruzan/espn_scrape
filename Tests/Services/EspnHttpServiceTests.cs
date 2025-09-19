@@ -1,5 +1,8 @@
 using ESPNScrape.Services;
+using ESPNScrape.Services.Interfaces;
+using ESPNScrape.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 using Moq.Protected;
 using System.Net;
@@ -14,6 +17,8 @@ namespace ESPNScrape.Tests.Services
         private readonly Mock<HttpMessageHandler> _mockHandler;
         private readonly HttpClient _httpClient;
         private readonly Mock<ILogger<EspnHttpService>> _mockLogger;
+        private readonly Mock<IEspnRateLimitService> _mockRateLimitService;
+        private readonly Mock<IOptions<ResilienceConfiguration>> _mockResilienceConfig;
         private readonly EspnHttpService _service;
 
         public EspnHttpServiceTests()
@@ -21,7 +26,13 @@ namespace ESPNScrape.Tests.Services
             _mockHandler = new Mock<HttpMessageHandler>();
             _httpClient = new HttpClient(_mockHandler.Object);
             _mockLogger = new Mock<ILogger<EspnHttpService>>();
-            _service = new EspnHttpService(_httpClient, _mockLogger.Object);
+            _mockRateLimitService = new Mock<IEspnRateLimitService>();
+            _mockResilienceConfig = new Mock<IOptions<ResilienceConfiguration>>();
+
+            // Setup default resilience configuration
+            _mockResilienceConfig.Setup(x => x.Value).Returns(new ResilienceConfiguration());
+
+            _service = new EspnHttpService(_httpClient, _mockLogger.Object, _mockRateLimitService.Object, _mockResilienceConfig.Object);
         }
 
         [Fact]
