@@ -50,6 +50,9 @@ try
     // Register ESPN Player Statistics Service
     builder.Services.AddScoped<IEspnPlayerStatsService, EspnPlayerStatsService>();
 
+    // Register ESPN Box Score Service
+    builder.Services.AddScoped<IEspnBoxScoreService, EspnBoxScoreService>();
+
     // Register Main ESPN API Service
     builder.Services.AddScoped<IEspnApiService, EspnApiService>();
 
