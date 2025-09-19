@@ -1,5 +1,6 @@
 using ESPNScrape.Jobs;
 using ESPNScrape.Services;
+using ESPNScrape.Services.Interfaces;
 using ESPNScrape.HealthChecks;
 using Quartz;
 using Serilog;
@@ -29,6 +30,9 @@ try
 
     // Add HTTP client for ESPN service (retry logic is handled in EspnHttpService)
     builder.Services.AddHttpClient<IEspnHttpService, EspnHttpService>();
+
+    // Register ESPN Scoreboard Service
+    builder.Services.AddScoped<IEspnScoreboardService, EspnScoreboardService>();
 
     // Add memory cache for response caching
     builder.Services.AddMemoryCache(options =>
