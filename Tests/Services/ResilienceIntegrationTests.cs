@@ -155,7 +155,7 @@ namespace ESPNScrape.Tests.Services
             var referenceUrl = "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/seasons/2025/events";
             _mockHandler.Protected()
                 .Setup<Task<HttpResponseMessage>>("SendAsync",
-                    ItExpr.Is<HttpRequestMessage>(req => req.RequestUri.ToString() == referenceUrl),
+                    ItExpr.Is<HttpRequestMessage>(req => req.RequestUri!.ToString() == referenceUrl),
                     ItExpr.IsAny<CancellationToken>())
                 .ReturnsAsync(new HttpResponseMessage
                 {
@@ -176,7 +176,7 @@ namespace ESPNScrape.Tests.Services
         {
             // Act & Assert
             await Assert.ThrowsAsync<ArgumentException>(() =>
-                _service.GetFromReferenceAsync<dynamic>(null));
+                _service.GetFromReferenceAsync<dynamic>(null!));
         }
 
         [Fact]

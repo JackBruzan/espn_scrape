@@ -3,11 +3,14 @@ using ESPNScrape.Services;
 using ESPNScrape.Services.Interfaces;
 using ESPNScrape.HealthChecks;
 using ESPNScrape.Configuration;
+using ESPNScrape.Models.PlayerMatching;
+using ESPNScrape.Models.DataSync;
 using Quartz;
 using Serilog;
 using Polly;
 using Polly.Extensions.Http;
 using Microsoft.Extensions.Http;
+using Microsoft.AspNetCore.Mvc;
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -20,7 +23,7 @@ try
 {
     Log.Information("Starting ESPN Scrape Service");
 
-    var builder = Host.CreateApplicationBuilder(args);
+    var builder = WebApplication.CreateBuilder(args);
 
     // Add Serilog
     builder.Services.AddSerilog();
@@ -33,6 +36,15 @@ try
 
     // Configure bulk operations settings
     builder.Services.Configure<BulkOperationsConfiguration>(builder.Configuration.GetSection("BulkOperations"));
+
+    // Configure logging settings
+    builder.Services.Configure<LoggingConfiguration>(builder.Configuration.GetSection("Logging"));
+
+    // Configure player matching settings
+    builder.Services.Configure<PlayerMatchingOptions>(builder.Configuration.GetSection("PlayerMatching"));
+
+    // Configure data sync settings
+    builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("DataSync"));
 
     // Register services
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
@@ -68,12 +80,29 @@ try
     // Register ESPN Bulk Operations Service
     builder.Services.AddScoped<IEspnBulkOperationsService, EspnBulkOperationsService>();
 
+    // Register ESPN Player Matching Service
+    builder.Services.AddScoped<IEspnPlayerMatchingService, EspnPlayerMatchingService>();
+
+    // Register ESPN Data Sync Service
+    builder.Services.AddScoped<IEspnDataSyncService, EspnDataSyncService>();
+
+    // Register logging and monitoring services
+    builder.Services.AddSingleton<IEspnLoggingService, EspnLoggingService>();
+    builder.Services.AddSingleton<IEspnMetricsService, EspnMetricsService>();
+    builder.Services.AddSingleton<IEspnAlertingService, EspnAlertingService>();
+
     // Register Main ESPN API Service
     builder.Services.AddScoped<IEspnApiService, EspnApiService>();
+
+    // Add ASP.NET Core services for diagnostic endpoints
+    builder.Services.AddControllers();
 
     // Add health checks
     builder.Services.AddHealthChecks()
         .AddCheck<EspnApiHealthCheck>("espn_api", tags: new[] { "espn", "api" });
+
+    // Add alert monitoring background service
+    builder.Services.AddHostedService<AlertMonitoringService>();
 
     // Add Quartz
     builder.Services.AddQuartz(q =>
@@ -136,9 +165,19 @@ try
     // Add Quartz hosted service
     builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
 
-    var host = builder.Build();
+    var app = builder.Build();
 
-    await host.RunAsync();
+    // Configure the HTTP request pipeline
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseDeveloperExceptionPage();
+    }
+
+    app.UseRouting();
+    app.MapControllers();
+    app.MapHealthChecks("/health");
+
+    await app.RunAsync();
 }
 catch (Exception ex)
 {
