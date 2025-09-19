@@ -75,5 +75,31 @@ namespace ESPNScrape.Services.Interfaces
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>True if statistics are valid, false otherwise</returns>
         Task<bool> ValidatePlayerStatsAsync(PlayerStats playerStats, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Extracts player statistics from multiple games in parallel
+        /// </summary>
+        /// <param name="eventIds">Collection of ESPN event IDs</param>
+        /// <param name="maxConcurrency">Maximum number of concurrent operations</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Collection of player statistics from all games</returns>
+        Task<IEnumerable<PlayerStats>> ExtractBulkGamePlayerStatsAsync(IEnumerable<string> eventIds, int maxConcurrency = 5, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Processes large JSON responses using streaming for memory efficiency
+        /// </summary>
+        /// <param name="boxScoreJsonStream">Stream of box score JSON data</param>
+        /// <param name="gameInfo">Game metadata for context</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Async enumerable of player statistics</returns>
+        IAsyncEnumerable<PlayerStats> StreamParsePlayerStatsAsync(Stream boxScoreJsonStream, GameEvent gameInfo, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Validates multiple player statistics records in parallel
+        /// </summary>
+        /// <param name="playerStatsCollection">Collection of player statistics to validate</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Dictionary of player stats with their validation results</returns>
+        Task<Dictionary<PlayerStats, bool>> ValidateBulkPlayerStatsAsync(IEnumerable<PlayerStats> playerStatsCollection, CancellationToken cancellationToken = default);
     }
 }

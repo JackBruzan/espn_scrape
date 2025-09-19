@@ -31,6 +31,9 @@ try
     // Configure resilience settings
     builder.Services.Configure<ResilienceConfiguration>(builder.Configuration.GetSection("Resilience"));
 
+    // Configure bulk operations settings
+    builder.Services.Configure<BulkOperationsConfiguration>(builder.Configuration.GetSection("BulkOperations"));
+
     // Register services
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
     builder.Services.AddSingleton<IESPNScrapingService, ESPNScrapingService>();
@@ -61,6 +64,9 @@ try
 
     // Register ESPN Box Score Service
     builder.Services.AddScoped<IEspnBoxScoreService, EspnBoxScoreService>();
+
+    // Register ESPN Bulk Operations Service
+    builder.Services.AddScoped<IEspnBulkOperationsService, EspnBulkOperationsService>();
 
     // Register Main ESPN API Service
     builder.Services.AddScoped<IEspnApiService, EspnApiService>();

@@ -1,6 +1,7 @@
 using ESPNScrape.Models.Espn;
 using ESPNScrape.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -750,6 +751,246 @@ namespace ESPNScrape.Services
         {
             var allowedHighValueStats = new[] { "yards", "passingYards", "rushingYards", "receivingYards" };
             return allowedHighValueStats.Any(allowed => statName.Contains(allowed, StringComparison.OrdinalIgnoreCase));
+        }
+
+        #endregion
+
+        #region Bulk Operations Implementation
+
+        public async Task<IEnumerable<PlayerStats>> ExtractBulkGamePlayerStatsAsync(
+            IEnumerable<string> eventIds,
+            int maxConcurrency = 5,
+            CancellationToken cancellationToken = default)
+        {
+            var eventIdList = eventIds.ToList();
+            _logger.LogInformation("Starting bulk extraction of player stats for {GameCount} games with concurrency {MaxConcurrency}",
+                eventIdList.Count, maxConcurrency);
+
+            var allPlayerStats = new ConcurrentBag<PlayerStats>();
+            var completedGames = 0;
+            var failedGames = 0;
+
+            using var semaphore = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+            var tasks = eventIdList.Select(async eventId =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
+                try
+                {
+                    _logger.LogDebug("Extracting player stats for game {EventId}", eventId);
+
+                    var gameStats = await ExtractGamePlayerStatsAsync(eventId, cancellationToken);
+                    foreach (var stat in gameStats)
+                    {
+                        allPlayerStats.Add(stat);
+                    }
+
+                    var completed = Interlocked.Increment(ref completedGames);
+                    _logger.LogDebug("Completed game {EventId} - {Completed}/{Total}", eventId, completed, eventIdList.Count);
+                }
+                catch (Exception ex)
+                {
+                    var failed = Interlocked.Increment(ref failedGames);
+                    _logger.LogError(ex, "Failed to extract player stats for game {EventId} - {Failed} failures so far", eventId, failed);
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+
+            _logger.LogInformation("Completed bulk extraction. Successfully processed {CompletedGames}/{TotalGames} games. " +
+                "Failed: {FailedGames}. Total player stats extracted: {TotalStats}",
+                completedGames, eventIdList.Count, failedGames, allPlayerStats.Count);
+
+            return allPlayerStats.ToList();
+        }
+
+        public async IAsyncEnumerable<PlayerStats> StreamParsePlayerStatsAsync(
+            Stream boxScoreJsonStream,
+            GameEvent gameInfo,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _logger.LogDebug("Starting streaming parse of player stats for game {GameId}", gameInfo.Id);
+
+            using var reader = new StreamReader(boxScoreJsonStream);
+            var jsonContent = await reader.ReadToEndAsync();
+
+            // Parse the JSON document
+            using var document = JsonDocument.Parse(jsonContent);
+            var root = document.RootElement;
+
+            // Navigate to players data structure
+            if (root.TryGetProperty("boxscore", out var boxscore) &&
+                boxscore.TryGetProperty("players", out var playersArray))
+            {
+                foreach (var teamPlayersElement in playersArray.EnumerateArray())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (teamPlayersElement.TryGetProperty("statistics", out var statisticsArray))
+                    {
+                        foreach (var positionGroup in statisticsArray.EnumerateArray())
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            if (positionGroup.TryGetProperty("athletes", out var athletesArray))
+                            {
+                                foreach (var athlete in athletesArray.EnumerateArray())
+                                {
+                                    cancellationToken.ThrowIfCancellationRequested();
+
+                                    var playerStats = await ParseIndividualPlayerStatsAsync(athlete, gameInfo, cancellationToken);
+                                    if (playerStats != null)
+                                    {
+                                        yield return playerStats;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            _logger.LogDebug("Completed streaming parse of player stats for game {GameId}", gameInfo.Id);
+        }
+
+        public async Task<Dictionary<PlayerStats, bool>> ValidateBulkPlayerStatsAsync(
+            IEnumerable<PlayerStats> playerStatsCollection,
+            CancellationToken cancellationToken = default)
+        {
+            var playerStatsList = playerStatsCollection.ToList();
+            _logger.LogInformation("Starting bulk validation of {StatsCount} player statistics records", playerStatsList.Count);
+
+            var results = new ConcurrentDictionary<PlayerStats, bool>();
+            var validCount = 0;
+            var invalidCount = 0;
+
+            // Use parallel processing for validation
+            var parallelOptions = new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = Environment.ProcessorCount
+            };
+
+            await Task.Run(() =>
+            {
+                Parallel.ForEach(playerStatsList, parallelOptions, playerStats =>
+                {
+                    try
+                    {
+                        var isValid = ValidatePlayerStatsAsync(playerStats, cancellationToken).GetAwaiter().GetResult();
+                        results.TryAdd(playerStats, isValid);
+
+                        if (isValid)
+                        {
+                            Interlocked.Increment(ref validCount);
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref invalidCount);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error validating player stats for player {PlayerId} in game {GameId}",
+                            playerStats.PlayerId, playerStats.GameId);
+                        results.TryAdd(playerStats, false);
+                        Interlocked.Increment(ref invalidCount);
+                    }
+                });
+            }, cancellationToken);
+
+            _logger.LogInformation("Completed bulk validation. Valid: {ValidCount}, Invalid: {InvalidCount}, Total: {Total}",
+                validCount, invalidCount, playerStatsList.Count);
+
+            return new Dictionary<PlayerStats, bool>(results);
+        }
+
+        private Task<PlayerStats?> ParseIndividualPlayerStatsAsync(
+            JsonElement athlete,
+            GameEvent gameInfo,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(ParseIndividualPlayerStats(athlete, gameInfo));
+        }
+
+        private PlayerStats? ParseIndividualPlayerStats(
+            JsonElement athlete,
+            GameEvent gameInfo)
+        {
+            try
+            {
+                // Extract basic player information
+                if (!athlete.TryGetProperty("athlete", out var athleteInfo))
+                {
+                    return null;
+                }
+
+                var playerId = GetJsonElementValue(athleteInfo, "id");
+                var displayName = GetJsonElementValue(athleteInfo, "displayName");
+                var shortName = GetJsonElementValue(athleteInfo, "shortName");
+
+                if (string.IsNullOrEmpty(playerId) || string.IsNullOrEmpty(displayName))
+                {
+                    return null;
+                }
+
+                // Extract position information
+                var position = new PlayerPosition();
+                if (athleteInfo.TryGetProperty("position", out var positionElement))
+                {
+                    position.Name = GetJsonElementValue(positionElement, "name") ?? "Unknown";
+                    position.Abbreviation = GetJsonElementValue(positionElement, "abbreviation") ?? "UNK";
+                }
+
+                // Create player stats object
+                var playerStats = new PlayerStats
+                {
+                    PlayerId = playerId,
+                    DisplayName = displayName,
+                    ShortName = shortName ?? displayName,
+                    Position = position,
+                    GameId = gameInfo.Id,
+                    Season = gameInfo.Season?.Year ?? DateTime.Now.Year,
+                    Week = gameInfo.Week?.WeekNumber ?? 1,
+                    SeasonType = gameInfo.Season?.SeasonType ?? 2,
+                    Statistics = new List<PlayerStatistic>()
+                };
+
+                // Extract statistics
+                if (athlete.TryGetProperty("stats", out var statsArray))
+                {
+                    foreach (var stat in statsArray.EnumerateArray())
+                    {
+                        var statName = GetJsonElementValue(stat, "name") ?? "";
+                        var statValue = GetJsonElementValue(stat, "value") ?? "0";
+
+                        if (!string.IsNullOrEmpty(statName) && decimal.TryParse(statValue, out var value))
+                        {
+                            playerStats.Statistics.Add(new PlayerStatistic
+                            {
+                                Name = statName,
+                                Value = value,
+                                DisplayValue = statValue
+                            });
+                        }
+                    }
+                }
+
+                return playerStats;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error parsing individual player stats in game {GameId}", gameInfo.Id);
+                return null;
+            }
+        }
+
+        private string? GetJsonElementValue(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out var prop) ? prop.GetString() : null;
         }
 
         #endregion
