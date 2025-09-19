@@ -5,10 +5,16 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <UserSecretsId>espn-scrape-service</UserSecretsId>
+        <GenerateProgramFile>false</GenerateProgramFile>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+        <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.0.0" />
+        <PackageReference Include="Polly" Version="7.2.4" />
+        <PackageReference Include="Polly.Extensions.Http" Version="3.0.0" />
+        <PackageReference Include="Moq" Version="4.20.69" />
         <PackageReference Include="Quartz" Version="3.8.0" />
         <PackageReference Include="Quartz.Extensions.Hosting" Version="3.8.0" />
         <PackageReference Include="Serilog" Version="3.1.1" />
