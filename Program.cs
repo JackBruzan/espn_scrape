@@ -63,22 +63,59 @@ try
     // Add Quartz
     builder.Services.AddQuartz(q =>
     {
-        // Create a "key" for the job
-        var jobKey = new JobKey("ESPNImageScrapingJob");
+        // Create a "key" for the ESPN Image scraping job (legacy)
+        var imageJobKey = new JobKey("ESPNImageScrapingJob");
 
-        // Register the job with the DI container
+        // Register the image scraping job with the DI container
         q.AddJob<ESPNImageScrapingJob>(opts => opts
-            .WithIdentity(jobKey)
+            .WithIdentity(imageJobKey)
             .DisallowConcurrentExecution()); // Prevent concurrent execution
 
-        // Create a trigger for the job
+        // Create a trigger for the image scraping job (disabled by default)
         q.AddTrigger(opts => opts
-            .ForJob(jobKey)
+            .ForJob(imageJobKey)
             .WithIdentity("ESPNImageScrapingJob-trigger")
-            // Run every 5 seconds for testing
             .WithSimpleSchedule(x => x
-                .WithIntervalInSeconds(5)
-                .RepeatForever()));
+                .WithIntervalInHours(24) // Run daily instead of every 5 seconds
+                .RepeatForever())
+            .StartAt(DateTimeOffset.UtcNow.AddHours(1))); // Start in 1 hour
+
+        // Create a "key" for the new ESPN API scraping job
+        var apiJobKey = new JobKey("EspnApiScrapingJob");
+
+        // Register the ESPN API scraping job with the DI container
+        q.AddJob<EspnApiScrapingJob>(opts => opts
+            .WithIdentity(apiJobKey)
+            .DisallowConcurrentExecution() // Prevent concurrent execution
+            .StoreDurably()); // Allow job to exist without triggers during off-season
+
+        // Create a trigger for the ESPN API scraping job
+        // During NFL season: Run twice per week (Wednesday and Sunday evenings)
+        // Wednesday: Collect mid-week data and prepare for upcoming games
+        // Sunday: Collect completed weekend games
+        q.AddTrigger(opts => opts
+            .ForJob(apiJobKey)
+            .WithIdentity("EspnApiScrapingJob-wednesday-trigger")
+            .WithCronSchedule("0 0 21 ? * WED *") // Every Wednesday at 9 PM UTC
+            .WithDescription("ESPN API data collection - Wednesday"));
+
+        q.AddTrigger(opts => opts
+            .ForJob(apiJobKey)
+            .WithIdentity("EspnApiScrapingJob-sunday-trigger")
+            .WithCronSchedule("0 0 23 ? * SUN *") // Every Sunday at 11 PM UTC
+            .WithDescription("ESPN API data collection - Sunday"));
+
+        // Optional: Add a manual trigger for testing (runs every 30 minutes during development)
+        if (builder.Environment.IsDevelopment())
+        {
+            q.AddTrigger(opts => opts
+                .ForJob(apiJobKey)
+                .WithIdentity("EspnApiScrapingJob-dev-trigger")
+                .WithSimpleSchedule(x => x
+                    .WithIntervalInMinutes(30)
+                    .RepeatForever())
+                .WithDescription("ESPN API data collection - Development"));
+        }
     });
 
     // Add Quartz hosted service
