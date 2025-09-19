@@ -1,9 +1,11 @@
 using ESPNScrape.Jobs;
 using ESPNScrape.Services;
+using ESPNScrape.HealthChecks;
 using Quartz;
 using Serilog;
 using Polly;
 using Polly.Extensions.Http;
+using Microsoft.Extensions.Http;
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -25,8 +27,18 @@ try
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
     builder.Services.AddSingleton<IESPNScrapingService, ESPNScrapingService>();
 
-    // Add HTTP client for ESPN service
+    // Add HTTP client for ESPN service (retry logic is handled in EspnHttpService)
     builder.Services.AddHttpClient<IEspnHttpService, EspnHttpService>();
+
+    // Add memory cache for response caching
+    builder.Services.AddMemoryCache(options =>
+    {
+        options.SizeLimit = 1000; // Max number of cache entries
+    });
+
+    // Add health checks
+    builder.Services.AddHealthChecks()
+        .AddCheck<EspnApiHealthCheck>("espn_api", tags: new[] { "espn", "api" });
 
     // Add Quartz
     builder.Services.AddQuartz(q =>
