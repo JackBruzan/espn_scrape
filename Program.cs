@@ -47,6 +47,9 @@ try
     // Register ESPN Cache Service
     builder.Services.AddSingleton<IEspnCacheService, EspnCacheService>();
 
+    // Register ESPN Player Statistics Service
+    builder.Services.AddScoped<IEspnPlayerStatsService, EspnPlayerStatsService>();
+
     // Register Main ESPN API Service
     builder.Services.AddScoped<IEspnApiService, EspnApiService>();
 
