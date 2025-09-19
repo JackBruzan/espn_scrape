@@ -126,7 +126,7 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<IEnumerable<string>> ExtractPlayerIdsAsync(string boxScoreJson, CancellationToken cancellationToken = default)
+        public Task<IEnumerable<string>> ExtractPlayerIdsAsync(string boxScoreJson, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -134,7 +134,7 @@ namespace ESPNScrape.Services
 
                 if (string.IsNullOrEmpty(boxScoreJson))
                 {
-                    return playerIds;
+                    return Task.FromResult<IEnumerable<string>>(playerIds);
                 }
 
                 var jsonDoc = JsonDocument.Parse(boxScoreJson);
@@ -145,7 +145,7 @@ namespace ESPNScrape.Services
 
                 _logger.LogDebug("Extracted {PlayerIdCount} unique player IDs from box score data", playerIds.Count);
 
-                return playerIds;
+                return Task.FromResult<IEnumerable<string>>(playerIds);
             }
             catch (Exception ex)
             {
@@ -154,7 +154,7 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<PlayerStats> MapEspnPlayerDataAsync(dynamic espnPlayerData, PlayerPosition position, GameEvent gameContext, CancellationToken cancellationToken = default)
+        public Task<PlayerStats> MapEspnPlayerDataAsync(dynamic? espnPlayerData, PlayerPosition position, GameEvent gameContext, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -195,7 +195,7 @@ namespace ESPNScrape.Services
                     }
                 }
 
-                return playerStats;
+                return Task.FromResult(playerStats);
             }
             catch (Exception ex)
             {
@@ -204,11 +204,11 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<string> NormalizePlayerNameAsync(string playerName, CancellationToken cancellationToken = default)
+        public Task<string> NormalizePlayerNameAsync(string playerName, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(playerName))
             {
-                return string.Empty;
+                return Task.FromResult(string.Empty);
             }
 
             try
@@ -234,12 +234,12 @@ namespace ESPNScrape.Services
                     cleaned = string.Join(" ", words);
                 }
 
-                return cleaned;
+                return Task.FromResult(cleaned);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to normalize player name '{PlayerName}', returning original", playerName);
-                return playerName;
+                return Task.FromResult(playerName);
             }
         }
 
@@ -322,7 +322,7 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<PlayerStats> HandleMissingDataAsync(dynamic playerData, PlayerPosition position, CancellationToken cancellationToken = default)
+        public Task<PlayerStats> HandleMissingDataAsync(dynamic playerData, PlayerPosition position, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -366,7 +366,7 @@ namespace ESPNScrape.Services
                 _logger.LogDebug("Created default player stats for position {Position} with {StatCount} default statistics",
                     position.Abbreviation, playerStats.Statistics.Count);
 
-                return playerStats;
+                return Task.FromResult(playerStats);
             }
             catch (Exception ex)
             {
@@ -375,13 +375,13 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<bool> ValidatePlayerStatsAsync(PlayerStats playerStats, CancellationToken cancellationToken = default)
+        public Task<bool> ValidatePlayerStatsAsync(PlayerStats playerStats, CancellationToken cancellationToken = default)
         {
             try
             {
                 if (playerStats == null)
                 {
-                    return false;
+                    return Task.FromResult(false);
                 }
 
                 // Validate required fields
@@ -391,7 +391,7 @@ namespace ESPNScrape.Services
                 {
                     _logger.LogWarning("Player stats missing required fields: PlayerId={PlayerId}, DisplayName={DisplayName}, Position={Position}",
                         playerStats.PlayerId, playerStats.DisplayName, playerStats.Position?.Abbreviation);
-                    return false;
+                    return Task.FromResult(false);
                 }
 
                 // Validate statistics values
@@ -404,7 +404,7 @@ namespace ESPNScrape.Services
                         {
                             _logger.LogWarning("Invalid negative statistic {StatName}={Value} for player {PlayerId}",
                                 stat.Name, stat.Value, playerStats.PlayerId);
-                            return false;
+                            return Task.FromResult(false);
                         }
 
                         // Check for extremely high values that might indicate parsing errors
@@ -412,17 +412,17 @@ namespace ESPNScrape.Services
                         {
                             _logger.LogWarning("Suspiciously high statistic {StatName}={Value} for player {PlayerId}",
                                 stat.Name, stat.Value, playerStats.PlayerId);
-                            return false;
+                            return Task.FromResult(false);
                         }
                     }
                 }
 
-                return true;
+                return Task.FromResult(true);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to validate player statistics for player {PlayerId}", playerStats?.PlayerId);
-                return false;
+                return Task.FromResult(false);
             }
         }
 

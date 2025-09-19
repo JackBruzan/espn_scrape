@@ -111,7 +111,7 @@ namespace ESPNScrape.Services
             }
         }
 
-        public async Task<GameInfo?> ExtractGameMetadataAsync(string boxScoreJson, CancellationToken cancellationToken = default)
+        public Task<GameInfo?> ExtractGameMetadataAsync(string boxScoreJson, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -123,7 +123,7 @@ namespace ESPNScrape.Services
                 if (!root.TryGetProperty("header", out var headerElement))
                 {
                     _logger.LogWarning("Box score JSON does not contain header information");
-                    return null;
+                    return Task.FromResult<GameInfo?>(null);
                 }
 
                 var gameInfo = new GameInfo();
@@ -202,12 +202,12 @@ namespace ESPNScrape.Services
                 }
 
                 _logger.LogDebug("Successfully extracted game metadata");
-                return gameInfo;
+                return Task.FromResult<GameInfo?>(gameInfo);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to extract game metadata from box score JSON");
-                return null;
+                return Task.FromResult<GameInfo?>(null);
             }
         }
 

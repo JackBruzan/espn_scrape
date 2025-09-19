@@ -53,7 +53,7 @@ namespace ESPNScrape.Services
             }
         }
 
-        public Task<IEnumerable<GameEvent>> ExtractEventsAsync(ScoreboardData scoreboard, CancellationToken cancellationToken = default)
+        public Task<IEnumerable<GameEvent>> ExtractEventsAsync(ScoreboardData? scoreboard, CancellationToken cancellationToken = default)
         {
             try
             {

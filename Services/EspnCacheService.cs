@@ -72,9 +72,13 @@ namespace ESPNScrape.Services
                 if (value != null)
                 {
                     await SetAsync(key, value, expiry, cancellationToken);
+                    return value;
                 }
-
-                return value;
+                else
+                {
+                    _logger.LogWarning("Factory returned null for cache key: {Key}", key);
+                    throw new InvalidOperationException($"Factory returned null for cache key: {key}");
+                }
             }
             catch (Exception ex)
             {
@@ -157,12 +161,12 @@ namespace ESPNScrape.Services
             return Task.FromResult(_memoryCache.TryGetValue(key, out _));
         }
 
-        public async Task WarmCacheAsync(int currentYear, int currentWeek, CancellationToken cancellationToken = default)
+        public Task WarmCacheAsync(int currentYear, int currentWeek, CancellationToken cancellationToken = default)
         {
             if (!_config.EnableCacheWarming)
             {
                 _logger.LogDebug("Cache warming is disabled");
-                return;
+                return Task.CompletedTask;
             }
 
             try
@@ -187,6 +191,7 @@ namespace ESPNScrape.Services
                 }
 
                 _logger.LogInformation("Cache warming completed");
+                return Task.CompletedTask;
             }
             catch (Exception ex)
             {

@@ -24,8 +24,8 @@ namespace ESPNScrape.Tests.Services
 
             var gamesMethod = methods.FirstOrDefault(m => m.Name == "GetGamesAsync");
             Assert.NotNull(gamesMethod);
-            Assert.True(gamesMethod.GetParameters().Any(p => p.Name == "year"));
-            Assert.True(gamesMethod.GetParameters().Any(p => p.Name == "weekNumber"));
+            Assert.Contains(gamesMethod.GetParameters(), p => p.Name == "year");
+            Assert.Contains(gamesMethod.GetParameters(), p => p.Name == "weekNumber");
         }
 
         [Fact]

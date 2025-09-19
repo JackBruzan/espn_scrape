@@ -294,7 +294,7 @@ public class EspnApiScrapingJob : IJob
     /// </summary>
     private string GetDataFilePath(string fileName)
     {
-        var dataDirectory = _configuration.GetValue<string>("DataStorage:Directory") ?? "data";
+        var dataDirectory = _configuration["DataStorage:Directory"] ?? "data";
         var fullPath = Path.Combine(dataDirectory, fileName);
 
         // Ensure directory exists
@@ -312,7 +312,7 @@ public class EspnApiScrapingJob : IJob
     /// </summary>
     private string GetDataFilePath(string subdirectory, string fileName)
     {
-        var dataDirectory = _configuration.GetValue<string>("DataStorage:Directory") ?? "data";
+        var dataDirectory = _configuration["DataStorage:Directory"] ?? "data";
         var fullPath = Path.Combine(dataDirectory, subdirectory, fileName);
 
         // Ensure directory exists
@@ -323,11 +323,9 @@ public class EspnApiScrapingJob : IJob
         }
 
         return fullPath;
-    }
-
-    /// <summary>
-    /// Determines if we're currently in NFL season
-    /// </summary>
+    }    /// <summary>
+         /// Determines if we're currently in NFL season
+         /// </summary>
     private bool IsNflSeason()
     {
         var now = DateTime.Now;
@@ -350,7 +348,8 @@ public class EspnApiScrapingJob : IJob
         }
 
         // Override for testing or manual execution
-        var forceExecution = _configuration.GetValue<bool>("Job:ForceExecution");
+        var forceExecutionConfig = _configuration["Job:ForceExecution"];
+        var forceExecution = bool.TryParse(forceExecutionConfig, out var force) && force;
         if (forceExecution)
         {
             _logger.LogInformation("Forcing job execution due to configuration setting");
@@ -367,7 +366,8 @@ public class EspnApiScrapingJob : IJob
     {
         lock (_lockObject)
         {
-            var timeoutMinutes = _configuration.GetValue<int>("Job:TimeoutMinutes", 30);
+            var timeoutConfig = _configuration["Job:TimeoutMinutes"];
+            var timeoutMinutes = int.TryParse(timeoutConfig, out var timeout) ? timeout : 30;
 
             if (_lastExecutionTimes.TryGetValue(jobId, out var lastExecution))
             {

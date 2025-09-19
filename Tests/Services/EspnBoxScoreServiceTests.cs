@@ -159,7 +159,7 @@ namespace ESPNScrape.Tests.Services
             // Assert
             Assert.NotNull(result);
             Assert.Equal(2, result.Value.drives.Count);
-            Assert.Equal(1, result.Value.scoringPlays.Count);
+            Assert.Single(result.Value.scoringPlays);
 
             var firstDrive = result.Value.drives[0];
             Assert.Equal("drive1", firstDrive.Id);
