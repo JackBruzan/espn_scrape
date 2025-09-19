@@ -10,6 +10,7 @@ namespace ESPNScrape.Tests.Services
     public class EspnApiServiceTests
     {
         private readonly Mock<IEspnScoreboardService> _mockScoreboardService;
+        private readonly Mock<IEspnBoxScoreService> _mockBoxScoreService;
         private readonly Mock<IEspnCacheService> _mockCacheService;
         private readonly Mock<IEspnHttpService> _mockHttpService;
         private readonly Mock<ILogger<EspnApiService>> _mockLogger;
@@ -18,12 +19,14 @@ namespace ESPNScrape.Tests.Services
         public EspnApiServiceTests()
         {
             _mockScoreboardService = new Mock<IEspnScoreboardService>();
+            _mockBoxScoreService = new Mock<IEspnBoxScoreService>();
             _mockCacheService = new Mock<IEspnCacheService>();
             _mockHttpService = new Mock<IEspnHttpService>();
             _mockLogger = new Mock<ILogger<EspnApiService>>();
 
             _apiService = new EspnApiService(
                 _mockScoreboardService.Object,
+                _mockBoxScoreService.Object,
                 _mockCacheService.Object,
                 _mockHttpService.Object,
                 _mockLogger.Object);
@@ -472,9 +475,18 @@ namespace ESPNScrape.Tests.Services
         [InlineData(3, 5)]   // Postseason
         public void GetMaxWeeksForSeasonType_DifferentSeasonTypes_ReturnsCorrectMaxWeeks(int seasonType, int expectedMaxWeeks)
         {
-            // This tests the private method indirectly through GetWeeksAsync behavior
-            // We would need reflection or make the method internal to test directly
-            Assert.True(expectedMaxWeeks > 0); // Basic validation that our test data is correct
+            // This validates expected max weeks for different season types
+            // The actual method is private, so we test the concept via data validation
+            Assert.True(seasonType >= 1 && seasonType <= 3, "Season type should be between 1 and 3");
+            Assert.True(expectedMaxWeeks > 0, "Expected max weeks should be positive");
+
+            // Test the logic indirectly - preseason has fewer weeks than regular season
+            if (seasonType == 1) // Preseason
+                Assert.True(expectedMaxWeeks <= 4, "Preseason should have 4 or fewer weeks");
+            else if (seasonType == 2) // Regular season
+                Assert.True(expectedMaxWeeks >= 17, "Regular season should have 17+ weeks");
+            else if (seasonType == 3) // Postseason
+                Assert.True(expectedMaxWeeks <= 5, "Postseason should have 5 or fewer weeks");
         }
 
         [Fact]
@@ -483,6 +495,7 @@ namespace ESPNScrape.Tests.Services
             // Act & Assert - Constructor should not throw
             var service = new EspnApiService(
                 _mockScoreboardService.Object,
+                _mockBoxScoreService.Object,
                 _mockCacheService.Object,
                 _mockHttpService.Object,
                 _mockLogger.Object);

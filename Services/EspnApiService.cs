@@ -7,17 +7,20 @@ namespace ESPNScrape.Services
     public class EspnApiService : IEspnApiService
     {
         private readonly IEspnScoreboardService _scoreboardService;
+        private readonly IEspnBoxScoreService _boxScoreService;
         private readonly IEspnCacheService _cacheService;
         private readonly IEspnHttpService _httpService;
         private readonly ILogger<EspnApiService> _logger;
 
         public EspnApiService(
             IEspnScoreboardService scoreboardService,
+            IEspnBoxScoreService boxScoreService,
             IEspnCacheService cacheService,
             IEspnHttpService httpService,
             ILogger<EspnApiService> logger)
         {
             _scoreboardService = scoreboardService;
+            _boxScoreService = boxScoreService;
             _cacheService = cacheService;
             _httpService = httpService;
             _logger = logger;
@@ -181,8 +184,12 @@ namespace ESPNScrape.Services
             {
                 _logger.LogInformation("Fetching box score for event ID {EventId}", eventId);
 
-                var boxScoreUrl = $"http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/events/{eventId}/competitions/{eventId}/boxscore";
-                var boxScore = await _httpService.GetAsync<BoxScore>(boxScoreUrl, cancellationToken);
+                var boxScore = await _boxScoreService.GetBoxScoreDataAsync(eventId, cancellationToken);
+
+                if (boxScore == null)
+                {
+                    throw new InvalidOperationException($"Box score data not found for event ID {eventId}");
+                }
 
                 _logger.LogInformation("Successfully retrieved box score for event ID {EventId}", eventId);
                 return boxScore;
