@@ -2,6 +2,7 @@ using ESPNScrape.Jobs;
 using ESPNScrape.Services;
 using ESPNScrape.Services.Interfaces;
 using ESPNScrape.HealthChecks;
+using ESPNScrape.Configuration;
 using Quartz;
 using Serilog;
 using Polly;
@@ -24,6 +25,9 @@ try
     // Add Serilog
     builder.Services.AddSerilog();
 
+    // Configure cache settings
+    builder.Services.Configure<CacheConfiguration>(builder.Configuration.GetSection("Cache"));
+
     // Register services
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
     builder.Services.AddSingleton<IESPNScrapingService, ESPNScrapingService>();
@@ -39,6 +43,12 @@ try
     {
         options.SizeLimit = 1000; // Max number of cache entries
     });
+
+    // Register ESPN Cache Service
+    builder.Services.AddSingleton<IEspnCacheService, EspnCacheService>();
+
+    // Register Main ESPN API Service
+    builder.Services.AddScoped<IEspnApiService, EspnApiService>();
 
     // Add health checks
     builder.Services.AddHealthChecks()
