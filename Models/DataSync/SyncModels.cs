@@ -715,4 +715,228 @@ namespace ESPNScrape.Models.DataSync
         /// </summary>
         public int TotalRecords { get; set; }
     }
+
+    /// <summary>
+    /// Represents player statistics in database format for storage
+    /// </summary>
+    public class DatabasePlayerStats
+    {
+        /// <summary>
+        /// ESPN Player ID for linking
+        /// </summary>
+        public string? EspnPlayerId { get; set; }
+
+        /// <summary>
+        /// ESPN Game ID for tracking
+        /// </summary>
+        public string? EspnGameId { get; set; }
+
+        /// <summary>
+        /// Link to Players table (if matched)
+        /// </summary>
+        public long? PlayerId { get; set; }
+
+        /// <summary>
+        /// Player display name
+        /// </summary>
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Player code for identification
+        /// </summary>
+        public string PlayerCode { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Team abbreviation
+        /// </summary>
+        public string Team { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Game date
+        /// </summary>
+        public DateTime GameDate { get; set; }
+
+        /// <summary>
+        /// Game location (Home/Away)
+        /// </summary>
+        public string GameLocation { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Season year
+        /// </summary>
+        public int? Season { get; set; }
+
+        /// <summary>
+        /// Week number
+        /// </summary>
+        public int? Week { get; set; }
+
+        /// <summary>
+        /// Season type (regular season, playoffs, etc.)
+        /// </summary>
+        public int? SeasonType { get; set; }
+
+        /// <summary>
+        /// Player position
+        /// </summary>
+        public string Position { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Player jersey number
+        /// </summary>
+        public string Jersey { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Passing statistics as JSONB
+        /// </summary>
+        public object? Passing { get; set; }
+
+        /// <summary>
+        /// Rushing statistics as JSONB
+        /// </summary>
+        public object? Rushing { get; set; }
+
+        /// <summary>
+        /// Receiving statistics as JSONB
+        /// </summary>
+        public object? Receiving { get; set; }
+
+        /// <summary>
+        /// Defensive statistics as JSONB
+        /// </summary>
+        public object? Defensive { get; set; }
+
+        /// <summary>
+        /// Kicking statistics as JSONB
+        /// </summary>
+        public object? Kicking { get; set; }
+
+        /// <summary>
+        /// Punting statistics as JSONB
+        /// </summary>
+        public object? Punting { get; set; }
+
+        /// <summary>
+        /// General/Other statistics as JSONB
+        /// </summary>
+        public object? General { get; set; }
+
+        /// <summary>
+        /// Timestamp when record was created
+        /// </summary>
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Timestamp when record was last updated
+        /// </summary>
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Result of data validation operations
+    /// </summary>
+    public class ValidationResult
+    {
+        /// <summary>
+        /// Whether validation passed
+        /// </summary>
+        public bool IsValid { get; set; } = true;
+
+        /// <summary>
+        /// List of validation errors
+        /// </summary>
+        public List<string> Errors { get; set; } = new();
+
+        /// <summary>
+        /// List of validation warnings
+        /// </summary>
+        public List<string> Warnings { get; set; } = new();
+
+        /// <summary>
+        /// Add an error to the validation result
+        /// </summary>
+        public void AddError(string error)
+        {
+            Errors.Add(error);
+            IsValid = false;
+        }
+
+        /// <summary>
+        /// Add a warning to the validation result
+        /// </summary>
+        public void AddWarning(string warning)
+        {
+            Warnings.Add(warning);
+        }
+
+        /// <summary>
+        /// Add multiple errors
+        /// </summary>
+        public void AddErrors(IEnumerable<string> errors)
+        {
+            foreach (var error in errors)
+            {
+                AddError(error);
+            }
+        }
+
+        /// <summary>
+        /// Add multiple warnings
+        /// </summary>
+        public void AddWarnings(IEnumerable<string> warnings)
+        {
+            foreach (var warning in warnings)
+            {
+                AddWarning(warning);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Organized statistics by category for easier processing
+    /// </summary>
+    public class StatCategories
+    {
+        /// <summary>
+        /// Passing statistics
+        /// </summary>
+        public Dictionary<string, decimal> Passing { get; set; } = new();
+
+        /// <summary>
+        /// Rushing statistics
+        /// </summary>
+        public Dictionary<string, decimal> Rushing { get; set; } = new();
+
+        /// <summary>
+        /// Receiving statistics
+        /// </summary>
+        public Dictionary<string, decimal> Receiving { get; set; } = new();
+
+        /// <summary>
+        /// Defensive statistics
+        /// </summary>
+        public Dictionary<string, decimal> Defensive { get; set; } = new();
+
+        /// <summary>
+        /// Kicking statistics
+        /// </summary>
+        public Dictionary<string, decimal> Kicking { get; set; } = new();
+
+        /// <summary>
+        /// Punting statistics
+        /// </summary>
+        public Dictionary<string, decimal> Punting { get; set; } = new();
+
+        /// <summary>
+        /// General/Other statistics
+        /// </summary>
+        public Dictionary<string, decimal> General { get; set; } = new();
+
+        /// <summary>
+        /// Check if any stats exist in any category
+        /// </summary>
+        public bool HasAnyStats =>
+            Passing.Any() || Rushing.Any() || Receiving.Any() ||
+            Defensive.Any() || Kicking.Any() || Punting.Any() || General.Any();
+    }
 }

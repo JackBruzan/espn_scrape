@@ -83,6 +83,9 @@ try
     // Register ESPN Player Matching Service
     builder.Services.AddScoped<IEspnPlayerMatchingService, EspnPlayerMatchingService>();
 
+    // Register ESPN Stats Transformation Service
+    builder.Services.AddScoped<IEspnStatsTransformationService, EspnStatsTransformationService>();
+
     // Register ESPN Data Sync Service
     builder.Services.AddScoped<IEspnDataSyncService, EspnDataSyncService>();
 
@@ -159,6 +162,72 @@ try
                     .WithIntervalInMinutes(30)
                     .RepeatForever())
                 .WithDescription("ESPN API data collection - Development"));
+        }
+
+        // ===== TICKET-006: ESPN Integration Scheduled Jobs =====
+
+        // Create a "key" for the ESPN Player Sync job
+        var playerSyncJobKey = new JobKey("EspnPlayerSyncJob");
+
+        // Register the ESPN Player Sync job with the DI container
+        q.AddJob<EspnPlayerSyncJob>(opts => opts
+            .WithIdentity(playerSyncJobKey)
+            .DisallowConcurrentExecution() // Prevent concurrent execution
+            .StoreDurably()); // Allow job to exist without triggers during off-season
+
+        // Create a trigger for the ESPN Player Sync job (Daily at 3 AM EST)
+        q.AddTrigger(opts => opts
+            .ForJob(playerSyncJobKey)
+            .WithIdentity("EspnPlayerSyncJob-daily-trigger")
+            .WithCronSchedule("0 0 8 * * ? *") // Daily at 8 AM UTC (3 AM EST)
+            .WithDescription("ESPN Player roster synchronization - Daily"));
+
+        // Create a "key" for the ESPN Stats Sync job
+        var statsSyncJobKey = new JobKey("EspnStatsSyncJob");
+
+        // Register the ESPN Stats Sync job with the DI container
+        q.AddJob<EspnStatsSyncJob>(opts => opts
+            .WithIdentity(statsSyncJobKey)
+            .DisallowConcurrentExecution() // Prevent concurrent execution
+            .StoreDurably()); // Allow job to exist without triggers during off-season
+
+        // Create a trigger for the ESPN Stats Sync job (Every Tuesday at 4 AM EST)
+        q.AddTrigger(opts => opts
+            .ForJob(statsSyncJobKey)
+            .WithIdentity("EspnStatsSyncJob-weekly-trigger")
+            .WithCronSchedule("0 0 9 ? * TUE *") // Every Tuesday at 9 AM UTC (4 AM EST)
+            .WithDescription("ESPN Player statistics synchronization - Weekly"));
+
+        // Create a "key" for the ESPN Historical Data job (manual trigger only)
+        var historicalJobKey = new JobKey("EspnHistoricalDataJob");
+
+        // Register the ESPN Historical Data job with the DI container (no automatic triggers)
+        q.AddJob<EspnHistoricalDataJob>(opts => opts
+            .WithIdentity(historicalJobKey)
+            .DisallowConcurrentExecution() // Prevent concurrent execution
+            .StoreDurably() // Allow job to exist without triggers for manual execution
+            .WithDescription("ESPN Historical data backfill - Manual trigger only"));
+
+        // Optional: Add development triggers for the integration jobs
+        if (builder.Environment.IsDevelopment())
+        {
+            // Player sync every hour in development
+            q.AddTrigger(opts => opts
+                .ForJob(playerSyncJobKey)
+                .WithIdentity("EspnPlayerSyncJob-dev-trigger")
+                .WithSimpleSchedule(x => x
+                    .WithIntervalInHours(1)
+                    .RepeatForever())
+                .WithDescription("ESPN Player sync - Development"));
+
+            // Stats sync every 2 hours in development
+            q.AddTrigger(opts => opts
+                .ForJob(statsSyncJobKey)
+                .WithIdentity("EspnStatsSyncJob-dev-trigger")
+                .WithSimpleSchedule(x => x
+                    .WithIntervalInHours(2)
+                    .RepeatForever())
+                .WithDescription("ESPN Stats sync - Development"));
         }
     });
 
