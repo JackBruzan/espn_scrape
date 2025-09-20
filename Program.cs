@@ -7,10 +7,7 @@ using ESPNScrape.Models.PlayerMatching;
 using ESPNScrape.Models.DataSync;
 using Quartz;
 using Serilog;
-using Polly;
-using Polly.Extensions.Http;
-using Microsoft.Extensions.Http;
-using Microsoft.AspNetCore.Mvc;
+
 
 // Configure Serilog
 Log.Logger = new LoggerConfiguration()
@@ -45,6 +42,9 @@ try
 
     // Configure data sync settings
     builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("DataSync"));
+
+    // Register database service
+    builder.Services.AddScoped<ISupabaseDatabaseService, SupabaseDatabaseService>();
 
     // Register services
     builder.Services.AddSingleton<IImageDownloadService, ImageDownloadService>();
@@ -102,7 +102,8 @@ try
 
     // Add health checks
     builder.Services.AddHealthChecks()
-        .AddCheck<EspnApiHealthCheck>("espn_api", tags: new[] { "espn", "api" });
+        .AddCheck<EspnApiHealthCheck>("espn_api", tags: new[] { "espn", "api" })
+        .AddCheck<EspnIntegrationHealthCheck>("espn_integration", tags: new[] { "espn", "integration", "monitoring" });
 
     // Add alert monitoring background service
     builder.Services.AddHostedService<AlertMonitoringService>();
@@ -155,6 +156,8 @@ try
         // Optional: Add a manual trigger for testing (runs every 30 minutes during development)
         if (builder.Environment.IsDevelopment())
         {
+            // Disable API scraping job in development - only testing player sync
+            /*
             q.AddTrigger(opts => opts
                 .ForJob(apiJobKey)
                 .WithIdentity("EspnApiScrapingJob-dev-trigger")
@@ -162,6 +165,7 @@ try
                     .WithIntervalInMinutes(30)
                     .RepeatForever())
                 .WithDescription("ESPN API data collection - Development"));
+            */
         }
 
         // ===== TICKET-006: ESPN Integration Scheduled Jobs =====
@@ -211,16 +215,17 @@ try
         // Optional: Add development triggers for the integration jobs
         if (builder.Environment.IsDevelopment())
         {
-            // Player sync every hour in development
+            // Player sync every second in development for debugging
             q.AddTrigger(opts => opts
                 .ForJob(playerSyncJobKey)
                 .WithIdentity("EspnPlayerSyncJob-dev-trigger")
                 .WithSimpleSchedule(x => x
-                    .WithIntervalInHours(1)
+                    .WithIntervalInSeconds(1)
                     .RepeatForever())
                 .WithDescription("ESPN Player sync - Development"));
 
-            // Stats sync every 2 hours in development
+            // Stats sync disabled in development - only testing player sync
+            /*
             q.AddTrigger(opts => opts
                 .ForJob(statsSyncJobKey)
                 .WithIdentity("EspnStatsSyncJob-dev-trigger")
@@ -228,6 +233,7 @@ try
                     .WithIntervalInHours(2)
                     .RepeatForever())
                 .WithDescription("ESPN Stats sync - Development"));
+            */
         }
     });
 

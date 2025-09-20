@@ -465,11 +465,11 @@ namespace ESPNScrape.Services
         private async Task<List<(int Id, string Name, string? Team, string? Position)>> GetDatabasePlayersAsync(
             CancellationToken cancellationToken)
         {
-            // TODO: Implement database query when we have Supabase client
-            // This would query the Players table to get all players for matching
+            _logger.LogDebug("Getting all database players for matching");
 
-            // For now, return empty list
-            _logger.LogWarning("GetDatabasePlayersAsync not yet implemented - need Supabase client integration");
+            // TEMPORARY: Return empty list to force all ESPN players to be treated as new
+            // This will trigger database writes so we can test the connection
+            _logger.LogWarning("Temporarily returning empty player list to force all ESPN players to be added as new");
             return await Task.FromResult(new List<(int Id, string Name, string? Team, string? Position)>());
         }
     }

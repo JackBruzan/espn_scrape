@@ -1,0 +1,57 @@
+{
+  "jobId": "638939284163467821",
+  "jobType": "HistoricalDataSync",
+  "syncType": "full",
+  "success": true,
+  "duration": 16.1095,
+  "timestamp": "2025-09-20T01:26:56.3769721Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "statsRecordsProcessed": 0,
+    "newStatsAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 0
+  }
+}
+{
+  "jobId": "638939287791319339",
+  "jobType": "HistoricalDataSync",
+  "syncType": "full",
+  "success": true,
+  "duration": 7526.0022,
+  "timestamp": "2025-09-20T01:33:06.6708798Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "statsRecordsProcessed": 0,
+    "newStatsAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 0
+  }
+}
+{
+  "jobId": "638939290504764150",
+  "jobType": "HistoricalDataSync",
+  "syncType": "full",
+  "success": true,
+  "duration": 431.3894,
+  "timestamp": "2025-09-20T01:37:30.9211046Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "statsRecordsProcessed": 0,
+    "newStatsAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 0
+  }
+}

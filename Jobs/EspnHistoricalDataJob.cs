@@ -58,12 +58,16 @@ public class EspnHistoricalDataJob : IJob
 
             // Get job parameters from JobDataMap
             var jobData = context.JobDetail.JobDataMap;
-            var syncType = jobData.GetString("SyncType") ?? "Full";
-            var season = jobData.GetIntValue("Season");
-            var startWeek = jobData.GetIntValue("StartWeek");
-            var endWeek = jobData.GetIntValue("EndWeek");
-            var startDate = jobData.GetString("StartDate");
-            var endDate = jobData.GetString("EndDate");
+            var mergedJobData = new JobDataMap();
+            mergedJobData.PutAll(jobData);
+            mergedJobData.PutAll(context.Trigger.JobDataMap);
+
+            var syncType = mergedJobData.GetString("SyncType") ?? "Full";
+            var season = mergedJobData.GetIntValue("Season");
+            var startWeek = mergedJobData.GetIntValue("StartWeek");
+            var endWeek = mergedJobData.GetIntValue("EndWeek");
+            var startDate = mergedJobData.GetString("StartDate") ?? string.Empty;
+            var endDate = mergedJobData.GetString("EndDate") ?? string.Empty;
 
             _logger.LogInformation("Historical data sync parameters: Type={SyncType}, Season={Season}, " +
                 "StartWeek={StartWeek}, EndWeek={EndWeek}, StartDate={StartDate}, EndDate={EndDate}",
@@ -142,7 +146,10 @@ public class EspnHistoricalDataJob : IJob
 
             // Record failure metrics
             var jobData = context.JobDetail.JobDataMap;
-            var syncType = jobData.GetString("SyncType") ?? "Unknown";
+            var mergedJobData = new JobDataMap();
+            mergedJobData.PutAll(jobData);
+            mergedJobData.PutAll(context.Trigger.JobDataMap);
+            var syncType = mergedJobData.GetString("SyncType") ?? "Unknown";
             await RecordJobMetricsAsync(jobId, false, duration, null, syncType, ex.Message, context.CancellationToken);
 
             // Re-throw to let Quartz handle retry logic

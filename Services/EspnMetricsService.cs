@@ -12,6 +12,26 @@ namespace ESPNScrape.Services
     public interface IEspnMetricsService
     {
         /// <summary>
+        /// Record sync operation performance
+        /// </summary>
+        void RecordSyncPerformance(Models.DataSync.SyncResult syncResult);
+
+        /// <summary>
+        /// Record player matching accuracy
+        /// </summary>
+        void RecordPlayerMatchingAccuracy(int totalPlayers, int successfulMatches, int manualReviewRequired);
+
+        /// <summary>
+        /// Record database operation performance
+        /// </summary>
+        void RecordDatabaseOperation(string operationType, TimeSpan duration, int recordsAffected, bool success = true);
+
+        /// <summary>
+        /// Start timing an operation (returns IDisposable for automatic timing)
+        /// </summary>
+        IDisposable StartOperation(string operationName, Dictionary<string, object>? metadata = null);
+
+        /// <summary>
         /// Record API response time
         /// </summary>
         void RecordApiResponseTime(string endpoint, TimeSpan responseTime, bool success);
@@ -78,6 +98,90 @@ namespace ESPNScrape.Services
         {
             _logger = logger;
             _config = config.Value;
+        }
+
+        public void RecordSyncPerformance(Models.DataSync.SyncResult syncResult)
+        {
+            var metricKey = $"sync_{syncResult.SyncType.ToString().ToLower()}";
+            var metric = new MetricData
+            {
+                Timestamp = DateTime.UtcNow,
+                Value = syncResult.Duration.TotalMilliseconds,
+                Tags = new Dictionary<string, string>
+                {
+                    { "syncType", syncResult.SyncType.ToString() },
+                    { "status", syncResult.Status.ToString() },
+                    { "playersProcessed", syncResult.PlayersProcessed.ToString() },
+                    { "playersUpdated", syncResult.PlayersUpdated.ToString() },
+                    { "newPlayersAdded", syncResult.NewPlayersAdded.ToString() },
+                    { "statsRecordsProcessed", syncResult.StatsRecordsProcessed.ToString() },
+                    { "matchingErrors", syncResult.MatchingErrors.ToString() },
+                    { "dataErrors", syncResult.DataErrors.ToString() },
+                    { "apiErrors", syncResult.ApiErrors.ToString() },
+                    { "recordsPerSecond", syncResult.Duration.TotalSeconds > 0 ? (syncResult.RecordsProcessed / syncResult.Duration.TotalSeconds).ToString("F2") : "0" }
+                }
+            };
+
+            AddMetric(metricKey, metric);
+
+            var success = syncResult.Status == Models.DataSync.SyncStatus.Completed;
+            _logger.LogInformation("Recorded sync performance for {SyncType}: Duration={Duration}ms, Status={Status}, Records={Records}",
+                syncResult.SyncType, syncResult.Duration.TotalMilliseconds, syncResult.Status, syncResult.RecordsProcessed);
+        }
+
+        public void RecordPlayerMatchingAccuracy(int totalPlayers, int successfulMatches, int manualReviewRequired)
+        {
+            var accuracy = totalPlayers > 0 ? (double)successfulMatches / totalPlayers : 0.0;
+            var manualReviewRate = totalPlayers > 0 ? (double)manualReviewRequired / totalPlayers : 0.0;
+
+            var metricKey = "player_matching_accuracy";
+            var metric = new MetricData
+            {
+                Timestamp = DateTime.UtcNow,
+                Value = accuracy * 100, // Store as percentage
+                Tags = new Dictionary<string, string>
+                {
+                    { "totalPlayers", totalPlayers.ToString() },
+                    { "successfulMatches", successfulMatches.ToString() },
+                    { "manualReviewRequired", manualReviewRequired.ToString() },
+                    { "accuracy", accuracy.ToString("P2") },
+                    { "manualReviewRate", manualReviewRate.ToString("P2") }
+                }
+            };
+
+            AddMetric(metricKey, metric);
+
+            _logger.LogInformation("Recorded player matching accuracy: {Accuracy:P2} ({SuccessfulMatches}/{TotalPlayers}), Manual review: {ManualReviewRate:P2}",
+                accuracy, successfulMatches, totalPlayers, manualReviewRate);
+        }
+
+        public void RecordDatabaseOperation(string operationType, TimeSpan duration, int recordsAffected, bool success = true)
+        {
+            var metricKey = $"database_{operationType.ToLower()}";
+            var recordsPerSecond = duration.TotalSeconds > 0 ? recordsAffected / duration.TotalSeconds : 0;
+
+            var metric = new MetricData
+            {
+                Timestamp = DateTime.UtcNow,
+                Value = duration.TotalMilliseconds,
+                Tags = new Dictionary<string, string>
+                {
+                    { "operationType", operationType },
+                    { "recordsAffected", recordsAffected.ToString() },
+                    { "success", success.ToString() },
+                    { "recordsPerSecond", recordsPerSecond.ToString("F2") }
+                }
+            };
+
+            AddMetric(metricKey, metric);
+
+            _logger.LogDebug("Recorded database operation {OperationType}: Duration={Duration}ms, Records={Records}, Success={Success}",
+                operationType, duration.TotalMilliseconds, recordsAffected, success);
+        }
+
+        public IDisposable StartOperation(string operationName, Dictionary<string, object>? metadata = null)
+        {
+            return new OperationTimer(this, operationName, metadata);
         }
 
         public void RecordApiResponseTime(string endpoint, TimeSpan responseTime, bool success)
@@ -512,6 +616,47 @@ namespace ESPNScrape.Services
         public Dictionary<string, ResponseTimeMetrics> ResponseTimeMetrics { get; set; } = new();
         public Dictionary<string, CacheMetrics> CacheMetrics { get; set; } = new();
         public Dictionary<string, List<MetricData>> RawMetrics { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Timer for measuring operation duration automatically
+    /// </summary>
+    public class OperationTimer : IDisposable
+    {
+        private readonly IEspnMetricsService _metricsService;
+        private readonly string _operationName;
+        private readonly Dictionary<string, object>? _metadata;
+        private readonly System.Diagnostics.Stopwatch _stopwatch;
+        private bool _disposed;
+
+        public OperationTimer(IEspnMetricsService metricsService, string operationName, Dictionary<string, object>? metadata)
+        {
+            _metricsService = metricsService;
+            _operationName = operationName;
+            _metadata = metadata;
+            _stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _stopwatch.Stop();
+
+                // Convert metadata to tags for recording
+                var tags = new Dictionary<string, string>();
+                if (_metadata != null)
+                {
+                    foreach (var kvp in _metadata)
+                    {
+                        tags[kvp.Key] = kvp.Value?.ToString() ?? string.Empty;
+                    }
+                }
+
+                _metricsService.RecordBusinessMetric(_operationName, _stopwatch.Elapsed.TotalMilliseconds, tags);
+                _disposed = true;
+            }
+        }
     }
 
     /// <summary>

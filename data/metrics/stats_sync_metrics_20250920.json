@@ -1,0 +1,80 @@
+{
+  "jobId": "638939348969891434",
+  "jobType": "StatsSync",
+  "success": true,
+  "duration": 536.1921,
+  "timestamp": "2025-09-20T03:14:57.5564237Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 1
+  }
+}
+{
+  "jobId": "638939350460144000",
+  "jobType": "StatsSync",
+  "success": true,
+  "duration": 515.3999,
+  "timestamp": "2025-09-20T03:17:26.5631917Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 1
+  }
+}
+{
+  "jobId": "638939351036188429",
+  "jobType": "StatsSync",
+  "success": true,
+  "duration": 502.195,
+  "timestamp": "2025-09-20T03:18:24.1511733Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 1
+  }
+}
+{
+  "jobId": "638939351880897790",
+  "jobType": "StatsSync",
+  "success": true,
+  "duration": 322.2806,
+  "timestamp": "2025-09-20T03:19:48.4430783Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 1
+  }
+}
+{
+  "jobId": "638939352073601898",
+  "jobType": "StatsSync",
+  "success": true,
+  "duration": 642.3502,
+  "timestamp": "2025-09-20T03:20:08.0342933Z",
+  "errorMessage": null,
+  "syncMetrics": {
+    "playersProcessed": 0,
+    "playersUpdated": 0,
+    "newPlayersAdded": 0,
+    "dataErrors": 0,
+    "matchingErrors": 0,
+    "warningCount": 1
+  }
+}

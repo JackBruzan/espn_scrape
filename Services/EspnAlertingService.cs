@@ -35,6 +35,31 @@ namespace ESPNScrape.Services
         /// Get current active alerts
         /// </summary>
         List<AlertRecord> GetActiveAlerts();
+
+        /// <summary>
+        /// Check for sync failure alerts
+        /// </summary>
+        Task CheckSyncAlertsAsync(Models.DataSync.SyncResult syncResult, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Check for data quality alerts
+        /// </summary>
+        Task CheckDataQualityAlertsAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Check for performance degradation alerts
+        /// </summary>
+        Task CheckPerformanceAlertsAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Check for health status alerts
+        /// </summary>
+        Task CheckHealthAlertsAsync(Microsoft.Extensions.Diagnostics.HealthChecks.HealthReport healthReport, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Get alert statistics
+        /// </summary>
+        Task<AlertStatistics> GetAlertStatisticsAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -180,6 +205,120 @@ namespace ESPNScrape.Services
                 .Where(a => a.State == AlertState.Active)
                 .OrderByDescending(a => a.LastOccurrence)
                 .ToList();
+        }
+
+        public async Task CheckSyncAlertsAsync(Models.DataSync.SyncResult syncResult, CancellationToken cancellationToken = default)
+        {
+            var alerts = new List<AlertCondition>();
+            var totalErrors = syncResult.MatchingErrors + syncResult.DataErrors + syncResult.ApiErrors;
+
+            // Check for sync failures
+            if (syncResult.Status == Models.DataSync.SyncStatus.Failed)
+            {
+                alerts.Add(new AlertCondition
+                {
+                    Type = "SyncFailure",
+                    Component = "SyncService",
+                    CurrentValue = 0, // Failed
+                    Threshold = 1, // Expected success
+                    Message = $"Sync operation {syncResult.SyncId} failed with {totalErrors} errors. Duration: {syncResult.Duration}",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+
+            // Check for excessive errors
+            var errorRate = syncResult.RecordsProcessed > 0 ? (double)totalErrors / syncResult.RecordsProcessed : 0;
+            if (errorRate > 0.05) // 5% error rate threshold
+            {
+                alerts.Add(new AlertCondition
+                {
+                    Type = "DataQuality",
+                    Component = "SyncService",
+                    CurrentValue = errorRate * 100,
+                    Threshold = 5.0,
+                    Message = $"Sync {syncResult.SyncType} has error rate of {errorRate:P2}",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+
+            await ProcessAlertsAsync(alerts);
+        }
+
+        public async Task CheckDataQualityAlertsAsync(CancellationToken cancellationToken = default)
+        {
+            // This method would check for data quality issues
+            // For now, we'll implement a basic structure
+            var alerts = new List<AlertCondition>();
+
+            // Add logic to check data freshness, completeness, etc.
+            // This would typically involve querying the database or sync service
+
+            await ProcessAlertsAsync(alerts);
+        }
+
+        public async Task CheckPerformanceAlertsAsync(CancellationToken cancellationToken = default)
+        {
+            // This method would check for performance degradations
+            var alerts = new List<AlertCondition>();
+
+            // Add logic to check API response times, sync performance, etc.
+
+            await ProcessAlertsAsync(alerts);
+        }
+
+        public async Task CheckHealthAlertsAsync(Microsoft.Extensions.Diagnostics.HealthChecks.HealthReport healthReport, CancellationToken cancellationToken = default)
+        {
+            var alerts = new List<AlertCondition>();
+
+            if (healthReport.Status == Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy)
+            {
+                alerts.Add(new AlertCondition
+                {
+                    Type = "SystemHealth",
+                    Component = "HealthCheck",
+                    CurrentValue = 0, // Unhealthy
+                    Threshold = 1, // Expected healthy
+                    Message = "One or more health checks failed",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+            else if (healthReport.Status == Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Degraded)
+            {
+                alerts.Add(new AlertCondition
+                {
+                    Type = "SystemHealth",
+                    Component = "HealthCheck",
+                    CurrentValue = 0.5, // Degraded
+                    Threshold = 1, // Expected healthy
+                    Message = "One or more health checks are degraded",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+
+            await ProcessAlertsAsync(alerts);
+        }
+
+        public async Task<AlertStatistics> GetAlertStatisticsAsync(CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask; // Make method async for consistency
+
+            var last24Hours = DateTime.UtcNow.AddHours(-24);
+            var recentAlerts = _alertHistory
+                .Where(a => a.FirstOccurrence >= last24Hours)
+                .ToList();
+
+            return new AlertStatistics
+            {
+                TotalAlerts24h = recentAlerts.Count,
+                HighSeverityAlerts24h = recentAlerts.Count(a => a.Severity == AlertSeverity.High),
+                MediumSeverityAlerts24h = recentAlerts.Count(a => a.Severity == AlertSeverity.Medium),
+                LowSeverityAlerts24h = recentAlerts.Count(a => a.Severity == AlertSeverity.Low),
+                AlertsByType = recentAlerts.GroupBy(a => a.AlertCondition.Type)
+                    .ToDictionary(g => g.Key, g => g.Count()),
+                AlertsByComponent = recentAlerts.GroupBy(a => a.AlertCondition.Component)
+                    .ToDictionary(g => g.Key, g => g.Count()),
+                GeneratedAt = DateTime.UtcNow
+            };
         }
 
         private async Task CheckForResolvedAlertsAsync(List<AlertCondition> currentAlerts)
@@ -387,5 +526,19 @@ namespace ESPNScrape.Services
         Medium,
         High,
         Critical
+    }
+
+    /// <summary>
+    /// Alert statistics
+    /// </summary>
+    public class AlertStatistics
+    {
+        public int TotalAlerts24h { get; set; }
+        public int HighSeverityAlerts24h { get; set; }
+        public int MediumSeverityAlerts24h { get; set; }
+        public int LowSeverityAlerts24h { get; set; }
+        public Dictionary<string, int> AlertsByType { get; set; } = new();
+        public Dictionary<string, int> AlertsByComponent { get; set; } = new();
+        public DateTime GeneratedAt { get; set; }
     }
 }

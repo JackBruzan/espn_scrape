@@ -1,4 +1,5 @@
 using ESPNScrape.Models.DataSync;
+using ESPNScrape.Models.PlayerMatching;
 using ESPNScrape.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Quartz;
@@ -15,17 +16,20 @@ public class EspnIntegrationController : ControllerBase
 {
     private readonly ILogger<EspnIntegrationController> _logger;
     private readonly IEspnDataSyncService _dataSyncService;
+    private readonly IEspnPlayerMatchingService _playerMatchingService;
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IConfiguration _configuration;
 
     public EspnIntegrationController(
         ILogger<EspnIntegrationController> logger,
         IEspnDataSyncService dataSyncService,
+        IEspnPlayerMatchingService playerMatchingService,
         ISchedulerFactory schedulerFactory,
         IConfiguration configuration)
     {
         _logger = logger;
         _dataSyncService = dataSyncService;
+        _playerMatchingService = playerMatchingService;
         _schedulerFactory = schedulerFactory;
         _configuration = configuration;
     }
@@ -280,6 +284,100 @@ public class EspnIntegrationController : ControllerBase
     }
 
     /// <summary>
+    /// Get list of ESPN players that couldn't be matched automatically
+    /// </summary>
+    /// <returns>List of unmatched players requiring manual review</returns>
+    [HttpGet("players/unmatched")]
+    public async Task<ActionResult<List<UnmatchedPlayer>>> GetUnmatchedPlayers()
+    {
+        try
+        {
+            _logger.LogInformation("Retrieving unmatched players via API");
+
+            var unmatchedPlayers = await _playerMatchingService.GetUnmatchedPlayersAsync();
+
+            _logger.LogInformation("Retrieved {Count} unmatched players", unmatchedPlayers.Count);
+
+            return Ok(unmatchedPlayers);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve unmatched players");
+            return StatusCode(500, new { message = "Failed to retrieve unmatched players", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Manually link an ESPN player to a database player
+    /// </summary>
+    /// <param name="request">Player link request with database player ID and ESPN player ID</param>
+    /// <returns>Link operation result</returns>
+    [HttpPost("players/link")]
+    public async Task<ActionResult<PlayerLinkResult>> LinkPlayer([FromBody] PlayerLinkRequest request)
+    {
+        try
+        {
+            _logger.LogInformation("Manual player link requested: Database Player {DatabasePlayerId} -> ESPN Player {EspnPlayerId}",
+                request.DatabasePlayerId, request.EspnPlayerId);
+
+            var success = await _playerMatchingService.LinkPlayerAsync(request.DatabasePlayerId, request.EspnPlayerId);
+
+            var result = new PlayerLinkResult
+            {
+                Success = success,
+                DatabasePlayerId = request.DatabasePlayerId,
+                EspnPlayerId = request.EspnPlayerId,
+                Message = success ? "Player linked successfully" : "Failed to link player",
+                LinkedAt = DateTime.UtcNow
+            };
+
+            if (success)
+            {
+                _logger.LogInformation("Successfully linked Database Player {DatabasePlayerId} to ESPN Player {EspnPlayerId}",
+                    request.DatabasePlayerId, request.EspnPlayerId);
+                return Ok(result);
+            }
+            else
+            {
+                _logger.LogWarning("Failed to link Database Player {DatabasePlayerId} to ESPN Player {EspnPlayerId}",
+                    request.DatabasePlayerId, request.EspnPlayerId);
+                return BadRequest(result);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to link Database Player {DatabasePlayerId} to ESPN Player {EspnPlayerId}",
+                request.DatabasePlayerId, request.EspnPlayerId);
+            return StatusCode(500, new { message = "Failed to link player", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Get player matching statistics and performance metrics
+    /// </summary>
+    /// <returns>Matching statistics</returns>
+    [HttpGet("players/matching-stats")]
+    public async Task<ActionResult<MatchingStatistics>> GetMatchingStatistics()
+    {
+        try
+        {
+            _logger.LogInformation("Retrieving player matching statistics via API");
+
+            var statistics = await _playerMatchingService.GetMatchingStatisticsAsync();
+
+            _logger.LogInformation("Retrieved matching statistics: {TotalPlayers} total, {Successful} successful matches",
+                statistics.TotalEspnPlayers, statistics.SuccessfulMatches);
+
+            return Ok(statistics);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve matching statistics");
+            return StatusCode(500, new { message = "Failed to retrieve matching statistics", error = ex.Message });
+        }
+    }
+
+    /// <summary>
     /// Cancel any running sync operations
     /// </summary>
     /// <returns>Cancellation result</returns>
@@ -486,4 +584,19 @@ public class JobExecution
     public DateTime Timestamp { get; set; }
     public string? ErrorMessage { get; set; }
     public object? SyncMetrics { get; set; }
+}
+
+public class PlayerLinkRequest
+{
+    public long DatabasePlayerId { get; set; }
+    public string EspnPlayerId { get; set; } = string.Empty;
+}
+
+public class PlayerLinkResult
+{
+    public bool Success { get; set; }
+    public long DatabasePlayerId { get; set; }
+    public string EspnPlayerId { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public DateTime LinkedAt { get; set; }
 }

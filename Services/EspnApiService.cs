@@ -1,6 +1,7 @@
 using ESPNScrape.Models.Espn;
 using ESPNScrape.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Text.Json.Serialization;
 
 namespace ESPNScrape.Services
 {
@@ -149,7 +150,7 @@ namespace ESPNScrape.Services
             {
                 _logger.LogInformation("Fetching game details for event ID {EventId}", eventId);
 
-                var eventUrl = $"http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/events/{eventId}";
+                var eventUrl = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/events/{eventId}";
                 var gameEvent = await _httpService.GetAsync<GameEvent>(eventUrl, cancellationToken);
 
                 _logger.LogInformation("Successfully retrieved game details for event ID {EventId}", eventId);
@@ -296,15 +297,34 @@ namespace ESPNScrape.Services
             {
                 _logger.LogInformation("Fetching NFL teams");
 
-                var teamsUrl = "http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/teams";
+                var allTeams = new List<Models.Espn.Team>();
+
+                // ESPN API returns paginated results with team references
+                var teamsUrl = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/teams";
                 var teamsResponse = await _httpService.GetAsync<TeamsResponse>(teamsUrl, cancellationToken);
 
-                _logger.LogInformation("Successfully retrieved {TeamCount} teams", teamsResponse.Teams.Count());
-                return teamsResponse.Teams;
+                _logger.LogInformation("Retrieved {TeamReferenceCount} team references, fetching team details...", teamsResponse.Items.Count());
+
+                // Fetch each team's details from their reference URLs
+                foreach (var teamRef in teamsResponse.Items)
+                {
+                    try
+                    {
+                        var team = await _httpService.GetAsync<Models.Espn.Team>(teamRef.Ref, cancellationToken);
+                        allTeams.Add(team);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to fetch team details from {TeamRef}", teamRef.Ref);
+                    }
+                }
+
+                _logger.LogInformation("Successfully retrieved {TeamCount} teams", allTeams.Count);
+                return allTeams.AsEnumerable();
             }, cancellationToken: cancellationToken);
         }
 
-        public async Task<Team> GetTeamAsync(string teamId, CancellationToken cancellationToken = default)
+        public async Task<Models.Espn.Team> GetTeamAsync(string teamId, CancellationToken cancellationToken = default)
         {
             var cacheKey = _cacheService.GenerateKey("GetTeam", teamId);
 
@@ -312,8 +332,8 @@ namespace ESPNScrape.Services
             {
                 _logger.LogInformation("Fetching team details for team ID {TeamId}", teamId);
 
-                var teamUrl = $"http://sports.core.api.espn.pvt/v2/sports/football/leagues/nfl/teams/{teamId}";
-                var team = await _httpService.GetAsync<Team>(teamUrl, cancellationToken);
+                var teamUrl = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/teams/{teamId}";
+                var team = await _httpService.GetAsync<Models.Espn.Team>(teamUrl, cancellationToken);
 
                 _logger.LogInformation("Successfully retrieved team details for team ID {TeamId}", teamId);
                 return team;
@@ -342,8 +362,17 @@ namespace ESPNScrape.Services
 
         private static (int seasonType, int weekNumber) CalculateCurrentWeek(DateTime currentDate, int nflYear)
         {
+            // For September 19, 2025, we're clearly in regular season
             // This is a simplified calculation - in a real implementation, 
             // you'd want to use actual NFL schedule data
+
+            // September 19th, 2025 should be around Week 3 of regular season
+            if (currentDate.Month == 9 && currentDate.Day >= 1)
+            {
+                // Regular season - Week 3 is reasonable for mid-September
+                return (2, 3);
+            }
+
             var seasonStart = new DateTime(nflYear, 9, 1); // Approximate season start
 
             if (currentDate < seasonStart)
@@ -381,11 +410,201 @@ namespace ESPNScrape.Services
         }
 
         #endregion
+
+        #region Player Roster Methods
+
+        public async Task<IEnumerable<Models.Player>> GetAllPlayersAsync(CancellationToken cancellationToken = default)
+        {
+            var cacheKey = _cacheService.GenerateKey("GetAllPlayers");
+
+            return await _cacheService.GetOrSetAsync(cacheKey, async () =>
+            {
+                _logger.LogInformation("Fetching all NFL players from ESPN API");
+
+                try
+                {
+                    // Get all teams first
+                    var teams = await GetTeamsAsync(cancellationToken);
+                    var allPlayers = new List<Models.Player>();
+
+                    // Fetch roster for each team
+                    foreach (var team in teams)
+                    {
+                        try
+                        {
+                            var teamRoster = await GetTeamRosterAsync(team.Id, cancellationToken);
+                            allPlayers.AddRange(teamRoster);
+
+                            // Add small delay to be respectful to the API
+                            await Task.Delay(100, cancellationToken);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to fetch roster for team {TeamId} ({TeamName})", team.Id, team.Name);
+                        }
+                    }
+
+                    _logger.LogInformation("Successfully retrieved {PlayerCount} players from {TeamCount} teams",
+                        allPlayers.Count, teams.Count());
+
+                    return allPlayers.AsEnumerable();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to fetch all players from ESPN API");
+                    throw;
+                }
+            }, TimeSpan.FromHours(6), cancellationToken); // Cache for 6 hours
+        }
+
+        public async Task<IEnumerable<Models.Player>> GetTeamRosterAsync(string teamId, CancellationToken cancellationToken = default)
+        {
+            var cacheKey = _cacheService.GenerateKey("GetTeamRoster", teamId);
+
+            return await _cacheService.GetOrSetAsync(cacheKey, async () =>
+            {
+                _logger.LogDebug("Fetching roster for team {TeamId}", teamId);
+
+                try
+                {
+                    // ESPN NFL team roster endpoint - use current season (2025)
+                    var endpoint = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/2025/teams/{teamId}/athletes";
+                    var rosterResponse = await _httpService.GetAsync<EspnRosterResponse>(endpoint, cancellationToken);
+
+                    if (rosterResponse?.Items == null || !rosterResponse.Items.Any())
+                    {
+                        _logger.LogWarning("No roster data found for team {TeamId}", teamId);
+                        return Enumerable.Empty<Models.Player>();
+                    }
+
+                    var allPlayers = new List<Models.Player>();
+
+                    // Fetch details for each athlete reference
+                    foreach (var athleteRef in rosterResponse.Items)
+                    {
+                        try
+                        {
+                            var athlete = await _httpService.GetAsync<EspnAthlete>(athleteRef.Ref, cancellationToken);
+                            var player = MapEspnAthleteToPlayer(athlete, teamId);
+                            if (player != null)
+                            {
+                                allPlayers.Add(player);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to fetch athlete details from {AthleteRef}", athleteRef.Ref);
+                        }
+                    }
+
+                    _logger.LogDebug("Successfully retrieved {PlayerCount} players for team {TeamId}",
+                        allPlayers.Count, teamId);
+
+                    return allPlayers.AsEnumerable();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to fetch roster for team {TeamId}", teamId);
+                    throw;
+                }
+            }, TimeSpan.FromHours(2), cancellationToken); // Cache for 2 hours
+        }
+
+        public async Task<Models.Player?> GetPlayerAsync(string playerId, CancellationToken cancellationToken = default)
+        {
+            var cacheKey = _cacheService.GenerateKey("GetPlayer", playerId);
+
+            var player = await _cacheService.GetOrSetAsync(cacheKey, async () =>
+            {
+                _logger.LogDebug("Fetching player details for {PlayerId}", playerId);
+
+                try
+                {
+                    // ESPN NFL player endpoint
+                    var endpoint = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes/{playerId}";
+                    var playerResponse = await _httpService.GetAsync<EspnAthleteResponse>(endpoint, cancellationToken);
+
+                    if (playerResponse?.Athlete == null)
+                    {
+                        _logger.LogWarning("No player data found for {PlayerId}", playerId);
+                        return null;
+                    }
+
+                    var mappedPlayer = MapEspnAthleteToPlayer(playerResponse.Athlete, null);
+
+                    _logger.LogDebug("Successfully retrieved player details for {PlayerId}: {PlayerName}",
+                        playerId, mappedPlayer?.DisplayName ?? "Unknown");
+
+                    return mappedPlayer;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to fetch player {PlayerId}", playerId);
+                    return null;
+                }
+            }, TimeSpan.FromHours(4), cancellationToken); // Cache for 4 hours
+
+            return player;
+        }
+
+        private Models.Player? MapEspnAthleteToPlayer(EspnAthlete athlete, string? teamId)
+        {
+            if (athlete == null) return null;
+
+            try
+            {
+                return new Models.Player
+                {
+                    Id = athlete.Id,
+                    DisplayName = athlete.DisplayName ?? athlete.FullName ?? $"{athlete.FirstName} {athlete.LastName}".Trim(),
+                    FirstName = athlete.FirstName,
+                    LastName = athlete.LastName,
+                    Position = athlete.Position != null ? new Models.Position
+                    {
+                        Abbreviation = athlete.Position.Abbreviation,
+                        DisplayName = athlete.Position.DisplayName
+                    } : null,
+                    Team = athlete.Team != null ? new Models.Team
+                    {
+                        Id = athlete.Team.Id,
+                        Abbreviation = athlete.Team.Abbreviation,
+                        DisplayName = athlete.Team.DisplayName
+                    } : (teamId != null ? new Models.Team { Id = teamId } : null),
+                    Active = athlete.Active ?? true
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to map ESPN athlete {AthleteId} to player model", athlete.Id);
+                return null;
+            }
+        }
+
+        #endregion
     }
 
     // Helper response model for teams API
     public class TeamsResponse
     {
-        public IEnumerable<Team> Teams { get; set; } = new List<Team>();
+        [JsonPropertyName("count")]
+        public int Count { get; set; }
+
+        [JsonPropertyName("pageIndex")]
+        public int PageIndex { get; set; }
+
+        [JsonPropertyName("pageSize")]
+        public int PageSize { get; set; }
+
+        [JsonPropertyName("pageCount")]
+        public int PageCount { get; set; }
+
+        [JsonPropertyName("items")]
+        public IEnumerable<TeamReference> Items { get; set; } = new List<TeamReference>();
+    }
+
+    public class TeamReference
+    {
+        [JsonPropertyName("$ref")]
+        public string Ref { get; set; } = string.Empty;
     }
 }

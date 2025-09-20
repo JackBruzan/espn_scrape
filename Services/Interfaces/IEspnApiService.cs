@@ -126,5 +126,28 @@ namespace ESPNScrape.Services.Interfaces
         /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Complete team information</returns>
         Task<Team> GetTeamAsync(string teamId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Gets all players from all NFL teams
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Collection of all NFL players</returns>
+        Task<IEnumerable<Models.Player>> GetAllPlayersAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Gets the complete roster for a specific team
+        /// </summary>
+        /// <param name="teamId">ESPN team identifier</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Collection of players on the team roster</returns>
+        Task<IEnumerable<Models.Player>> GetTeamRosterAsync(string teamId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Gets detailed information for a specific player
+        /// </summary>
+        /// <param name="playerId">ESPN player identifier</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Complete player information</returns>
+        Task<Models.Player?> GetPlayerAsync(string playerId, CancellationToken cancellationToken = default);
     }
 }
