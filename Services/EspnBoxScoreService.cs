@@ -23,6 +23,49 @@ namespace ESPNScrape.Services
             _logger = logger;
         }
 
+        /// <summary>
+        /// Maps ESPN team abbreviations to database team full names
+        /// </summary>
+        private static string MapEspnTeamToFullName(string espnAbbreviation)
+        {
+            return espnAbbreviation?.ToUpper() switch
+            {
+                "ARI" => "Arizona Cardinals",
+                "ATL" => "Atlanta Falcons",
+                "BAL" => "Baltimore Ravens",
+                "BUF" => "Buffalo Bills",
+                "CAR" => "Carolina Panthers",
+                "CHI" => "Chicago Bears",
+                "CIN" => "Cincinnati Bengals",
+                "CLE" => "Cleveland Browns",
+                "DAL" => "Dallas Cowboys",
+                "DEN" => "Denver Broncos",
+                "DET" => "Detroit Lions",
+                "GB" => "Green Bay Packers",
+                "HOU" => "Houston Texans",
+                "IND" => "Indianapolis Colts",
+                "JAX" => "Jacksonville Jaguars",
+                "KC" => "Kansas City Chiefs",
+                "LAC" => "Los Angeles Chargers",
+                "LAR" => "Los Angeles Rams",
+                "LV" => "Las Vegas Raiders",
+                "MIA" => "Miami Dolphins",
+                "MIN" => "Minnesota Vikings",
+                "NE" => "New England Patriots",
+                "NO" => "New Orleans Saints",
+                "NYG" => "New York Giants",
+                "NYJ" => "New York Jets",
+                "PHI" => "Philadelphia Eagles",
+                "PIT" => "Pittsburgh Steelers",
+                "SEA" => "Seattle Seahawks",
+                "SF" => "San Francisco 49ers",
+                "TB" => "Tampa Bay Buccaneers",
+                "TEN" => "Tennessee Titans",
+                "WAS" => "Washington Commanders",
+                _ => espnAbbreviation ?? string.Empty
+            };
+        }
+
         public async Task<BoxScore?> GetBoxScoreDataAsync(string gameId, CancellationToken cancellationToken = default)
         {
             try
@@ -86,7 +129,9 @@ namespace ESPNScrape.Services
                     return null;
                 }
 
-                var teamsArray = teamsElement.EnumerateArray().ToArray();
+                var teamsArray = teamsElement.ValueKind == JsonValueKind.Array
+                    ? teamsElement.EnumerateArray().ToArray()
+                    : Array.Empty<JsonElement>();
                 if (teamsArray.Length != 2)
                 {
                     _logger.LogWarning("Expected 2 teams in box score, found {Count}", teamsArray.Length);
@@ -138,18 +183,21 @@ namespace ESPNScrape.Services
                 if (headerElement.TryGetProperty("officials", out var officialsElement))
                 {
                     var officials = new List<Official>();
-                    foreach (var officialElement in officialsElement.EnumerateArray())
+                    if (officialsElement.ValueKind == JsonValueKind.Array)
                     {
-                        var official = new Official();
-                        if (officialElement.TryGetProperty("displayName", out var nameElement))
+                        foreach (var officialElement in officialsElement.EnumerateArray())
                         {
-                            official.DisplayName = nameElement.GetString() ?? string.Empty;
+                            var official = new Official();
+                            if (officialElement.TryGetProperty("displayName", out var nameElement))
+                            {
+                                official.DisplayName = nameElement.GetString() ?? string.Empty;
+                            }
+                            if (officialElement.TryGetProperty("position", out var positionElement))
+                            {
+                                official.Position = positionElement.GetString() ?? string.Empty;
+                            }
+                            officials.Add(official);
                         }
-                        if (officialElement.TryGetProperty("position", out var positionElement))
-                        {
-                            official.Position = positionElement.GetString() ?? string.Empty;
-                        }
-                        officials.Add(official);
                     }
                     gameInfo.Officials = officials;
                 }
@@ -216,52 +264,252 @@ namespace ESPNScrape.Services
             return string.Format(BoxScoreUrlPattern, gameId);
         }
 
-        public async Task<(List<Drive> drives, List<ScoringPlay> scoringPlays)?> ParsePlayByPlayDataAsync(string boxScoreJson, CancellationToken cancellationToken = default)
+        public async Task<List<PlayerStats>> ParsePlayerStatsAsync(string boxScoreJson, CancellationToken cancellationToken = default)
         {
+            await Task.CompletedTask; // For async signature consistency
+
             try
             {
-                _logger.LogDebug("Parsing play-by-play data from box score JSON");
+                _logger.LogDebug("Parsing player statistics from boxscore JSON");
 
                 var jsonDoc = JsonDocument.Parse(boxScoreJson);
                 var root = jsonDoc.RootElement;
 
-                var drives = new List<Drive>();
-                var scoringPlays = new List<ScoringPlay>();
+                var allPlayerStats = new List<PlayerStats>();
 
-                // Extract drives
-                if (root.TryGetProperty("drives", out var drivesElement))
+                // Extract game metadata from root level
+                var gameId = string.Empty;
+                var season = 0;
+                var week = 0;
+
+                // Try to get game ID from header.competitions[0].id
+                if (root.TryGetProperty("header", out var headerElement))
                 {
-                    foreach (var driveElement in drivesElement.EnumerateArray())
+                    // Get game ID from header.id
+                    if (headerElement.TryGetProperty("id", out var gameIdElement))
                     {
-                        var drive = await ParseSingleDriveAsync(driveElement, cancellationToken);
-                        if (drive != null)
+                        gameId = gameIdElement.GetString() ?? string.Empty;
+                    }
+
+                    // Get season from header.season.year
+                    if (headerElement.TryGetProperty("season", out var seasonElement) &&
+                        seasonElement.TryGetProperty("year", out var yearElement))
+                    {
+                        season = yearElement.GetInt32();
+                    }
+
+                    // Get week from header.week
+                    if (headerElement.TryGetProperty("week", out var weekElement))
+                    {
+                        week = weekElement.GetInt32();
+                    }
+                }
+
+                _logger.LogDebug("Extracted game metadata: GameId={GameId}, Season={Season}, Week={Week}",
+                    gameId, season, week);
+
+                // Parse from boxscore.players structure
+                if (!root.TryGetProperty("boxscore", out var boxscoreElement) ||
+                    !boxscoreElement.TryGetProperty("players", out var playersElement))
+                {
+                    _logger.LogWarning("Box score JSON does not contain expected players data structure");
+                    return allPlayerStats;
+                }
+
+                if (playersElement.ValueKind != JsonValueKind.Array)
+                {
+                    _logger.LogWarning("Players element is not an array: {ValueKind}", playersElement.ValueKind);
+                    return allPlayerStats;
+                }
+
+                // Loop through each team's players
+                foreach (var teamPlayersElement in playersElement.EnumerateArray())
+                {
+                    // Get team information
+                    var team = new Team();
+                    if (teamPlayersElement.TryGetProperty("team", out var teamElement))
+                    {
+                        if (teamElement.TryGetProperty("id", out var teamIdElement))
                         {
-                            drives.Add(drive);
+                            team.Id = teamIdElement.GetString() ?? string.Empty;
+                        }
+                        if (teamElement.TryGetProperty("displayName", out var teamNameElement))
+                        {
+                            team.DisplayName = teamNameElement.GetString() ?? string.Empty;
+                        }
+                        if (teamElement.TryGetProperty("abbreviation", out var teamAbbrevElement))
+                        {
+                            team.Abbreviation = teamAbbrevElement.GetString() ?? string.Empty;
+                        }
+                    }
+
+                    // Parse statistics groups (passing, rushing, receiving, etc.)
+                    if (teamPlayersElement.TryGetProperty("statistics", out var statisticsElement) &&
+                        statisticsElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var statGroupElement in statisticsElement.EnumerateArray())
+                        {
+                            // Get stat group info (passing, rushing, etc.)
+                            var statGroupName = string.Empty;
+                            var statKeys = new List<string>();
+                            var statLabels = new List<string>();
+                            var statDescriptions = new List<string>();
+
+                            if (statGroupElement.TryGetProperty("name", out var nameElement))
+                            {
+                                statGroupName = nameElement.GetString() ?? string.Empty;
+                            }
+
+                            if (statGroupElement.TryGetProperty("keys", out var keysElement))
+                            {
+                                if (keysElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    statKeys = keysElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty).ToList();
+                                }
+                                else if (keysElement.ValueKind == JsonValueKind.String)
+                                {
+                                    statKeys = keysElement.GetString()?.Split(' ').ToList() ?? new List<string>();
+                                }
+                            }
+
+                            if (statGroupElement.TryGetProperty("labels", out var labelsElement))
+                            {
+                                if (labelsElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    statLabels = labelsElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty).ToList();
+                                }
+                                else if (labelsElement.ValueKind == JsonValueKind.String)
+                                {
+                                    statLabels = labelsElement.GetString()?.Split(' ').ToList() ?? new List<string>();
+                                }
+                            }
+
+                            if (statGroupElement.TryGetProperty("descriptions", out var descriptionsElement))
+                            {
+                                if (descriptionsElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    statDescriptions = descriptionsElement.EnumerateArray().Select(x => x.GetString() ?? string.Empty).ToList();
+                                }
+                                else if (descriptionsElement.ValueKind == JsonValueKind.String)
+                                {
+                                    statDescriptions = descriptionsElement.GetString()?.Split(' ').ToList() ?? new List<string>();
+                                }
+                            }
+
+                            // Parse individual players in this stat group
+                            if (statGroupElement.TryGetProperty("athletes", out var athletesElement) &&
+                                athletesElement.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var athleteElement in athletesElement.EnumerateArray())
+                                {
+                                    var playerStats = await ParseSinglePlayerStatsAsync(
+                                        athleteElement, team, statGroupName, statKeys, statLabels, statDescriptions,
+                                        gameId, season, week, cancellationToken);
+
+                                    if (playerStats != null)
+                                    {
+                                        allPlayerStats.Add(playerStats);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
 
-                // Extract scoring plays
-                if (root.TryGetProperty("scoringPlays", out var scoringPlaysElement))
-                {
-                    foreach (var playElement in scoringPlaysElement.EnumerateArray())
-                    {
-                        var scoringPlay = await ParseSingleScoringPlayAsync(playElement, cancellationToken);
-                        if (scoringPlay != null)
-                        {
-                            scoringPlays.Add(scoringPlay);
-                        }
-                    }
-                }
-
-                _logger.LogDebug("Successfully parsed {DriveCount} drives and {ScoringPlayCount} scoring plays",
-                    drives.Count, scoringPlays.Count);
-
-                return (drives, scoringPlays);
+                _logger.LogInformation("Successfully parsed {PlayerCount} player statistics from boxscore", allPlayerStats.Count);
+                return allPlayerStats;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to parse play-by-play data from box score JSON");
+                _logger.LogError(ex, "Failed to parse player statistics from box score JSON");
+                return new List<PlayerStats>();
+            }
+        }
+
+        private async Task<PlayerStats?> ParseSinglePlayerStatsAsync(
+            JsonElement athleteElement,
+            Team team,
+            string statGroupName,
+            List<string> statKeys,
+            List<string> statLabels,
+            List<string> statDescriptions,
+            string gameId,
+            int season,
+            int week,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask; // For async signature consistency
+
+            try
+            {
+                // Get player info
+                var playerId = string.Empty;
+                var playerName = string.Empty;
+
+                if (athleteElement.TryGetProperty("athlete", out var athleteInfoElement))
+                {
+                    if (athleteInfoElement.TryGetProperty("id", out var idElement))
+                    {
+                        playerId = idElement.GetString() ?? string.Empty;
+                    }
+                    if (athleteInfoElement.TryGetProperty("displayName", out var nameElement))
+                    {
+                        playerName = nameElement.GetString() ?? string.Empty;
+                    }
+                }
+
+                // Get stats array
+                if (!athleteElement.TryGetProperty("stats", out var statsElement) ||
+                    statsElement.ValueKind != JsonValueKind.Array)
+                {
+                    return null;
+                }
+
+                // Create PlayerStats object
+                var playerStats = new PlayerStats
+                {
+                    PlayerId = playerId,
+                    DisplayName = playerName,
+                    Team = team,
+                    GameId = gameId,
+                    Season = season,
+                    Week = week,
+                    Statistics = new List<PlayerStatistic>()
+                };
+
+                // Map stats using keys and stat values
+                var statsArray = statsElement.EnumerateArray().ToArray();
+                for (int i = 0; i < statKeys.Count && i < statsArray.Length; i++)
+                {
+                    var statKey = statKeys[i];
+                    var statValue = statsArray[i].GetString() ?? "0";
+
+                    // Create PlayerStatistic object
+                    var playerStatistic = new PlayerStatistic
+                    {
+                        Name = statKey,
+                        DisplayName = i < statLabels.Count ? statLabels[i] : statKey,
+                        ShortDisplayName = statKey,
+                        Description = i < statDescriptions.Count ? statDescriptions[i] : "",
+                        Abbreviation = statKey,
+                        DisplayValue = statValue,
+                        Category = statGroupName
+                    };
+
+                    // Try to parse numeric value
+                    if (decimal.TryParse(statValue, out var numericValue))
+                    {
+                        playerStatistic.Value = numericValue;
+                    }
+
+                    playerStats.Statistics.Add(playerStatistic);
+                }
+
+                return playerStats;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse individual player stats for team {TeamId}", team.Id);
                 return null;
             }
         }
@@ -401,12 +649,15 @@ namespace ESPNScrape.Services
                     boxscoreElement.TryGetProperty("teams", out var teamsElement))
                 {
                     var teams = new List<TeamBoxScore>();
-                    foreach (var teamElement in teamsElement.EnumerateArray())
+                    if (teamsElement.ValueKind == JsonValueKind.Array)
                     {
-                        var team = await ParseSingleTeamStatsAsync(teamElement, cancellationToken);
-                        if (team != null)
+                        foreach (var teamElement in teamsElement.EnumerateArray())
                         {
-                            teams.Add(team);
+                            var team = await ParseSingleTeamStatsAsync(teamElement, cancellationToken);
+                            if (team != null)
+                            {
+                                teams.Add(team);
+                            }
                         }
                     }
                     boxScore.Teams = teams;
@@ -419,12 +670,17 @@ namespace ESPNScrape.Services
                     boxScore.GameInfo = gameInfo;
                 }
 
-                // Parse play-by-play data
-                var playByPlayData = await ParsePlayByPlayDataAsync(jsonData, cancellationToken);
-                if (playByPlayData.HasValue)
+                // Parse player statistics (final game stats only)
+                var playerStats = await ParsePlayerStatsAsync(jsonData, cancellationToken);
+                if (playerStats.Count > 0)
                 {
-                    boxScore.Drives = playByPlayData.Value.drives;
-                    boxScore.ScoringPlays = playByPlayData.Value.scoringPlays;
+                    boxScore.Players = playerStats;
+                    _logger.LogInformation("Successfully parsed {PlayerCount} player statistics from boxscore", playerStats.Count);
+                }
+                else
+                {
+                    _logger.LogWarning("No player statistics found in boxscore data");
+                    boxScore.Players = new List<PlayerStats>();
                 }
 
                 return boxScore;
@@ -467,26 +723,39 @@ namespace ESPNScrape.Services
                 if (teamElement.TryGetProperty("statistics", out var statsElement))
                 {
                     var statistics = new List<BoxScoreTeamStatistic>();
-                    foreach (var statElement in statsElement.EnumerateArray())
+                    if (statsElement.ValueKind == JsonValueKind.Array)
                     {
-                        var statistic = new BoxScoreTeamStatistic();
-                        if (statElement.TryGetProperty("name", out var nameElement))
+                        foreach (var statElement in statsElement.EnumerateArray())
                         {
-                            statistic.Name = nameElement.GetString() ?? string.Empty;
+                            var statistic = new BoxScoreTeamStatistic();
+                            if (statElement.TryGetProperty("name", out var nameElement))
+                            {
+                                statistic.Name = nameElement.GetString() ?? string.Empty;
+                            }
+                            if (statElement.TryGetProperty("displayName", out var displayNameElement))
+                            {
+                                statistic.DisplayName = displayNameElement.GetString() ?? string.Empty;
+                            }
+                            if (statElement.TryGetProperty("value", out var valueElement))
+                            {
+                                statistic.Value = valueElement.ValueKind switch
+                                {
+                                    JsonValueKind.String => valueElement.GetString() ?? string.Empty,
+                                    JsonValueKind.Number => valueElement.GetRawText(),
+                                    _ => valueElement.ToString()
+                                };
+                            }
+                            if (statElement.TryGetProperty("displayValue", out var displayValueElement))
+                            {
+                                statistic.DisplayValue = displayValueElement.ValueKind switch
+                                {
+                                    JsonValueKind.String => displayValueElement.GetString() ?? string.Empty,
+                                    JsonValueKind.Number => displayValueElement.GetRawText(),
+                                    _ => displayValueElement.ToString()
+                                };
+                            }
+                            statistics.Add(statistic);
                         }
-                        if (statElement.TryGetProperty("displayName", out var displayNameElement))
-                        {
-                            statistic.DisplayName = displayNameElement.GetString() ?? string.Empty;
-                        }
-                        if (statElement.TryGetProperty("value", out var valueElement))
-                        {
-                            statistic.Value = valueElement.GetString() ?? string.Empty;
-                        }
-                        if (statElement.TryGetProperty("displayValue", out var displayValueElement))
-                        {
-                            statistic.DisplayValue = displayValueElement.GetString() ?? string.Empty;
-                        }
-                        statistics.Add(statistic);
                     }
                     teamBoxScore.Statistics = statistics;
                 }
@@ -496,12 +765,15 @@ namespace ESPNScrape.Services
                 {
                     var lineScores = new List<BoxScoreLineScore>();
                     var periodNumber = 1;
-                    foreach (var scoreElement in lineScoreElement.EnumerateArray())
+                    if (lineScoreElement.ValueKind == JsonValueKind.Array)
                     {
-                        var lineScore = new BoxScoreLineScore();
-                        lineScore.Period = periodNumber++;
-                        lineScore.Value = scoreElement.GetInt32();
-                        lineScores.Add(lineScore);
+                        foreach (var scoreElement in lineScoreElement.EnumerateArray())
+                        {
+                            var lineScore = new BoxScoreLineScore();
+                            lineScore.Period = periodNumber++;
+                            lineScore.Value = scoreElement.GetInt32();
+                            lineScores.Add(lineScore);
+                        }
                     }
                     teamBoxScore.LineScores = lineScores;
                 }
@@ -521,36 +793,49 @@ namespace ESPNScrape.Services
 
             try
             {
+                _logger.LogDebug("ParseSingleDriveAsync: element type {ValueKind}", driveElement.ValueKind);
                 var drive = new Drive();
 
                 if (driveElement.TryGetProperty("id", out var idElement))
                 {
-                    drive.Id = idElement.GetString() ?? string.Empty;
+                    drive.Id = idElement.ValueKind == JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : idElement.ToString();
                 }
 
                 if (driveElement.TryGetProperty("description", out var descElement))
                 {
-                    drive.Description = descElement.GetString() ?? string.Empty;
+                    drive.Description = descElement.ValueKind == JsonValueKind.String
+                        ? descElement.GetString() ?? string.Empty
+                        : descElement.ToString();
                 }
 
                 if (driveElement.TryGetProperty("plays", out var playsElement))
                 {
-                    drive.Plays = playsElement.GetInt32();
+                    drive.Plays = playsElement.ValueKind == JsonValueKind.Array
+                        ? playsElement.GetArrayLength()
+                        : (playsElement.ValueKind == JsonValueKind.Number ? playsElement.GetInt32() : 0);
                 }
 
                 if (driveElement.TryGetProperty("yards", out var yardsElement))
                 {
-                    drive.Yards = yardsElement.GetInt32();
+                    drive.Yards = yardsElement.ValueKind == JsonValueKind.Number
+                        ? yardsElement.GetInt32()
+                        : 0;
                 }
 
                 if (driveElement.TryGetProperty("timeElapsed", out var timeElement))
                 {
-                    drive.TimeElapsed = timeElement.GetString() ?? string.Empty;
+                    drive.TimeElapsed = timeElement.ValueKind == JsonValueKind.String
+                        ? timeElement.GetString() ?? string.Empty
+                        : timeElement.ToString();
                 }
 
                 if (driveElement.TryGetProperty("result", out var resultElement))
                 {
-                    drive.Result = resultElement.GetString() ?? string.Empty;
+                    drive.Result = resultElement.ValueKind == JsonValueKind.String
+                        ? resultElement.GetString() ?? string.Empty
+                        : resultElement.ToString();
                 }
 
                 // Parse team information
@@ -559,11 +844,15 @@ namespace ESPNScrape.Services
                     var team = new Team();
                     if (teamElement.TryGetProperty("id", out var teamIdElement))
                     {
-                        team.Id = teamIdElement.GetString() ?? string.Empty;
+                        team.Id = teamIdElement.ValueKind == JsonValueKind.String
+                            ? teamIdElement.GetString() ?? string.Empty
+                            : teamIdElement.ToString();
                     }
                     if (teamElement.TryGetProperty("displayName", out var teamNameElement))
                     {
-                        team.DisplayName = teamNameElement.GetString() ?? string.Empty;
+                        team.DisplayName = teamNameElement.ValueKind == JsonValueKind.String
+                            ? teamNameElement.GetString() ?? string.Empty
+                            : teamNameElement.ToString();
                     }
                     drive.Team = team;
                 }
@@ -587,32 +876,44 @@ namespace ESPNScrape.Services
 
                 if (playElement.TryGetProperty("id", out var idElement))
                 {
-                    scoringPlay.Id = idElement.GetString() ?? string.Empty;
+                    scoringPlay.Id = idElement.ValueKind == JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : idElement.ToString();
                 }
 
                 if (playElement.TryGetProperty("text", out var textElement))
                 {
-                    scoringPlay.Text = textElement.GetString() ?? string.Empty;
+                    scoringPlay.Text = textElement.ValueKind == JsonValueKind.String
+                        ? textElement.GetString() ?? string.Empty
+                        : textElement.ToString();
                 }
 
                 if (playElement.TryGetProperty("type", out var typeElement))
                 {
-                    scoringPlay.Type = typeElement.GetString() ?? string.Empty;
+                    scoringPlay.Type = typeElement.ValueKind == JsonValueKind.String
+                        ? typeElement.GetString() ?? string.Empty
+                        : typeElement.ToString();
                 }
 
                 if (playElement.TryGetProperty("period", out var periodElement))
                 {
-                    scoringPlay.Period = periodElement.GetInt32();
+                    scoringPlay.Period = periodElement.ValueKind == JsonValueKind.Number
+                        ? periodElement.GetInt32()
+                        : 0;
                 }
 
                 if (playElement.TryGetProperty("clock", out var clockElement))
                 {
-                    scoringPlay.Clock = clockElement.GetString() ?? string.Empty;
+                    scoringPlay.Clock = clockElement.ValueKind == JsonValueKind.String
+                        ? clockElement.GetString() ?? string.Empty
+                        : clockElement.ToString();
                 }
 
                 if (playElement.TryGetProperty("scoreValue", out var scoreElement))
                 {
-                    scoringPlay.ScoreValue = scoreElement.GetInt32();
+                    scoringPlay.ScoreValue = scoreElement.ValueKind == JsonValueKind.Number
+                        ? scoreElement.GetInt32()
+                        : 0;
                 }
 
                 // Parse team information
@@ -621,11 +922,15 @@ namespace ESPNScrape.Services
                     var team = new Team();
                     if (teamElement.TryGetProperty("id", out var teamIdElement))
                     {
-                        team.Id = teamIdElement.GetString() ?? string.Empty;
+                        team.Id = teamIdElement.ValueKind == JsonValueKind.String
+                            ? teamIdElement.GetString() ?? string.Empty
+                            : teamIdElement.ToString();
                     }
                     if (teamElement.TryGetProperty("displayName", out var teamNameElement))
                     {
-                        team.DisplayName = teamNameElement.GetString() ?? string.Empty;
+                        team.DisplayName = teamNameElement.ValueKind == JsonValueKind.String
+                            ? teamNameElement.GetString() ?? string.Empty
+                            : teamNameElement.ToString();
                     }
                     scoringPlay.Team = team;
                 }
@@ -659,6 +964,120 @@ namespace ESPNScrape.Services
             // Return string value
             return string.IsNullOrEmpty(stat.Value) ? defaultValue : stat.Value;
         }
+
+        #region New ESPN Structure Parsing
+
+        private async Task<Drive?> ParseNewDriveStructureAsync(JsonElement driveElement, CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask; // For async signature consistency
+
+            try
+            {
+                var drive = new Drive();
+
+                // Parse drive ID
+                if (driveElement.TryGetProperty("id", out var idElement))
+                {
+                    drive.Id = idElement.ValueKind == JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : idElement.ToString();
+                }
+
+                // Parse drive description
+                if (driveElement.TryGetProperty("description", out var descElement))
+                {
+                    drive.Description = descElement.ValueKind == JsonValueKind.String
+                        ? descElement.GetString() ?? string.Empty
+                        : descElement.ToString();
+                }
+
+                // Parse team - for now we'll create a minimal team object
+                if (driveElement.TryGetProperty("teamName", out var teamNameElement))
+                {
+                    drive.Team = new Team { Name = teamNameElement.GetString() ?? string.Empty };
+                }
+
+                // Parse plays count from the plays array
+                if (driveElement.TryGetProperty("plays", out var playsElement) &&
+                    playsElement.ValueKind == JsonValueKind.Array)
+                {
+                    drive.Plays = playsElement.GetArrayLength();
+                }
+
+                // Try to extract yards and time from description
+                // Description format is typically: "11 plays, 70 yards, 6:46"
+                var description = drive.Description;
+                if (!string.IsNullOrEmpty(description))
+                {
+                    var parts = description.Split(',');
+                    foreach (var part in parts)
+                    {
+                        var trimmed = part.Trim();
+                        if (trimmed.Contains("yard"))
+                        {
+                            var yardsPart = trimmed.Split(' ')[0];
+                            if (int.TryParse(yardsPart, out var yards))
+                            {
+                                drive.Yards = yards;
+                            }
+                        }
+                        else if (trimmed.Contains(":"))
+                        {
+                            drive.TimeElapsed = trimmed;
+                        }
+                    }
+                }
+
+                _logger.LogDebug("Parsed drive {DriveId} with {PlayCount} plays, {Yards} yards",
+                    drive.Id, drive.Plays, drive.Yards);
+                return drive;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse new drive structure");
+                return null;
+            }
+        }
+
+        private async Task<ScoringPlay?> ParseNewScoringPlayStructureAsync(JsonElement playElement, CancellationToken cancellationToken)
+        {
+            await Task.CompletedTask; // For async signature consistency
+
+            try
+            {
+                var scoringPlay = new ScoringPlay();
+
+                if (playElement.TryGetProperty("id", out var idElement))
+                {
+                    scoringPlay.Id = idElement.ValueKind == JsonValueKind.String
+                        ? idElement.GetString() ?? string.Empty
+                        : idElement.ToString();
+                }
+
+                if (playElement.TryGetProperty("description", out var descElement))
+                {
+                    scoringPlay.Text = descElement.ValueKind == JsonValueKind.String
+                        ? descElement.GetString() ?? string.Empty
+                        : descElement.ToString();
+                }
+
+                if (playElement.TryGetProperty("playType", out var typeElement))
+                {
+                    scoringPlay.Type = typeElement.ValueKind == JsonValueKind.String
+                        ? typeElement.GetString() ?? string.Empty
+                        : typeElement.ToString();
+                }
+
+                return scoringPlay;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse new scoring play structure");
+                return null;
+            }
+        }
+
+        #endregion
 
         #endregion
     }

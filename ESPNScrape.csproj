@@ -32,6 +32,6 @@
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
         <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
-        <PackageReference Include="Supabase" Version="0.15.2" />
+        <PackageReference Include="Supabase" Version="1.0.0" />
     </ItemGroup>
 </Project>

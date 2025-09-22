@@ -47,12 +47,13 @@ namespace ESPNScrape.Services.Interfaces
         string GetBoxScoreUrl(string gameId);
 
         /// <summary>
-        /// Parse play-by-play data from box score if available
+        /// <summary>
+        /// Parse player statistics from boxscore.players section
         /// </summary>
         /// <param name="boxScoreJson">Raw JSON box score data from ESPN</param>
         /// <param name="cancellationToken">Cancellation token</param>
-        /// <returns>List of drives and scoring plays</returns>
-        Task<(List<Drive> drives, List<ScoringPlay> scoringPlays)?> ParsePlayByPlayDataAsync(string boxScoreJson, CancellationToken cancellationToken = default);
+        /// <returns>List of player statistics</returns>
+        Task<List<PlayerStats>> ParsePlayerStatsAsync(string boxScoreJson, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Get team offensive statistics from box score

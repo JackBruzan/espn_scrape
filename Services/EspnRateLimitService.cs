@@ -27,10 +27,12 @@ namespace ESPNScrape.Services
 
         public async Task WaitForRequestAsync(CancellationToken cancellationToken = default)
         {
+            bool semaphoreAcquired = false;
             try
             {
                 // Wait for semaphore with timeout
                 var acquired = await _semaphore.WaitAsync(_config.QueueTimeoutMs, cancellationToken);
+                semaphoreAcquired = acquired;
 
                 if (!acquired)
                 {
@@ -61,10 +63,12 @@ namespace ESPNScrape.Services
 
                     // Release semaphore and wait outside of lock
                     _semaphore.Release();
+                    semaphoreAcquired = false; // Mark as released
                     await Task.Delay(waitTime, cancellationToken);
 
                     // Re-acquire semaphore
                     acquired = await _semaphore.WaitAsync(_config.QueueTimeoutMs, cancellationToken);
+                    semaphoreAcquired = acquired;
                     if (!acquired)
                     {
                         throw new TimeoutException("Rate limit queue timeout exceeded during retry");
@@ -93,14 +97,21 @@ namespace ESPNScrape.Services
             }
             finally
             {
-                // Always release semaphore on successful completion
-                try
+                // Only release semaphore if we still have it acquired
+                if (semaphoreAcquired)
                 {
-                    _semaphore.Release();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Service is being disposed, ignore
+                    try
+                    {
+                        _semaphore.Release();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Service is being disposed, ignore
+                    }
+                    catch (SemaphoreFullException ex)
+                    {
+                        _logger.LogWarning(ex, "Attempted to release semaphore but it was already at maximum capacity");
+                    }
                 }
             }
         }

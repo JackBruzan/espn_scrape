@@ -40,6 +40,17 @@ namespace ESPNScrape.Services
                 var jsonContent = ExtractEmbeddedJson(htmlContent);
                 var scoreboardData = ParseScoreboardData(jsonContent);
 
+                // Set week information from request parameters since ESPN structure doesn't provide it directly
+                if (scoreboardData.Week.WeekNumber == 0)
+                {
+                    scoreboardData.Week.WeekNumber = week;
+                    scoreboardData.Week.SeasonType = seasonType;
+                    scoreboardData.Week.Year = year;
+                    scoreboardData.Week.Text = $"Week {week}";
+                    scoreboardData.Week.Label = $"Week {week}";
+                    scoreboardData.Week.IsActive = true;
+                }
+
                 _logger.LogInformation("Successfully retrieved scoreboard data for Year: {Year}, Week: {Week}, SeasonType: {SeasonType}. Found {EventCount} events",
                     year, week, seasonType, scoreboardData.Events.Count());
 
@@ -220,7 +231,8 @@ namespace ESPNScrape.Services
         {
             var events = new List<GameEvent>();
 
-            if (sbDataElement.TryGetProperty("events", out var eventsElement) && eventsElement.ValueKind == JsonValueKind.Array)
+            // ESPN uses 'evts' instead of 'events' for the games array
+            if (sbDataElement.TryGetProperty("evts", out var eventsElement) && eventsElement.ValueKind == JsonValueKind.Array)
             {
                 foreach (var eventElement in eventsElement.EnumerateArray())
                 {
@@ -238,27 +250,26 @@ namespace ESPNScrape.Services
                     }
                 }
             }
+            else
+            {
+                _logger.LogWarning("No 'evts' property found in ESPN scoreboard data");
+            }
 
             return events;
         }
 
         private Season ParseSeason(JsonElement sbDataElement)
         {
-            if (sbDataElement.TryGetProperty("leagues", out var leaguesElement) &&
-                leaguesElement.ValueKind == JsonValueKind.Array)
+            // ESPN uses 'season' directly in scoreboard, not within 'leagues' array
+            if (sbDataElement.TryGetProperty("season", out var seasonElement))
             {
-                var firstLeague = leaguesElement.EnumerateArray().FirstOrDefault();
-                if (firstLeague.ValueKind != JsonValueKind.Undefined &&
-                    firstLeague.TryGetProperty("season", out var seasonElement))
+                try
                 {
-                    try
-                    {
-                        return JsonSerializer.Deserialize<Season>(seasonElement.GetRawText()) ?? new Season();
-                    }
-                    catch (JsonException ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to parse season information from ESPN response");
-                    }
+                    return JsonSerializer.Deserialize<Season>(seasonElement.GetRawText()) ?? new Season();
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(ex, "Failed to parse season information from ESPN response");
                 }
             }
 
@@ -267,18 +278,9 @@ namespace ESPNScrape.Services
 
         private Week ParseWeek(JsonElement sbDataElement)
         {
-            if (sbDataElement.TryGetProperty("week", out var weekElement))
-            {
-                try
-                {
-                    return JsonSerializer.Deserialize<Week>(weekElement.GetRawText()) ?? new Week();
-                }
-                catch (JsonException ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse week information from ESPN response");
-                }
-            }
-
+            // ESPN calendar structure doesn't provide simple week access
+            // For now, create a basic Week object - the actual week number
+            // should be derived from the request parameters in GetScoreboardAsync
             return new Week();
         }
 

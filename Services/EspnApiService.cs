@@ -404,9 +404,36 @@ namespace ESPNScrape.Services
 
         private static IEnumerable<PlayerStats> ExtractPlayerStatsFromBoxScore(BoxScore boxScore)
         {
-            // This would be implemented to extract player statistics from the box score
-            // For now, return empty collection as a placeholder
-            return Enumerable.Empty<PlayerStats>();
+            try
+            {
+                if (boxScore?.Players == null || !boxScore.Players.Any())
+                {
+                    return Enumerable.Empty<PlayerStats>();
+                }
+
+                // The BoxScore already contains parsed PlayerStats, so we can return them directly
+                // Filter out any null or invalid entries and ensure game context
+                var validPlayerStats = boxScore.Players
+                    .Where(ps => ps != null && !string.IsNullOrEmpty(ps.PlayerId))
+                    .Select(ps =>
+                    {
+                        // Ensure the player stats have game context information
+                        if (string.IsNullOrEmpty(ps.GameId))
+                        {
+                            ps.GameId = boxScore.GameId;
+                        }
+
+                        return ps;
+                    })
+                    .ToList();
+
+                return validPlayerStats;
+            }
+            catch (Exception)
+            {
+                // Return empty collection to allow processing to continue
+                return Enumerable.Empty<PlayerStats>();
+            }
         }
 
         #endregion
@@ -514,37 +541,46 @@ namespace ESPNScrape.Services
         {
             var cacheKey = _cacheService.GenerateKey("GetPlayer", playerId);
 
-            var player = await _cacheService.GetOrSetAsync(cacheKey, async () =>
+            // Check cache first
+            var cachedPlayer = await _cacheService.GetAsync<Models.Player>(cacheKey, cancellationToken);
+            if (cachedPlayer != null)
             {
-                _logger.LogDebug("Fetching player details for {PlayerId}", playerId);
+                return cachedPlayer;
+            }
 
-                try
+            // Fetch from API
+            _logger.LogDebug("Fetching player details for {PlayerId}", playerId);
+
+            try
+            {
+                // ESPN NFL player endpoint
+                var endpoint = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes/{playerId}";
+                var playerResponse = await _httpService.GetAsync<EspnAthleteResponse>(endpoint, cancellationToken);
+
+                if (playerResponse?.Athlete == null)
                 {
-                    // ESPN NFL player endpoint
-                    var endpoint = $"https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/athletes/{playerId}";
-                    var playerResponse = await _httpService.GetAsync<EspnAthleteResponse>(endpoint, cancellationToken);
-
-                    if (playerResponse?.Athlete == null)
-                    {
-                        _logger.LogWarning("No player data found for {PlayerId}", playerId);
-                        return null;
-                    }
-
-                    var mappedPlayer = MapEspnAthleteToPlayer(playerResponse.Athlete, null);
-
-                    _logger.LogDebug("Successfully retrieved player details for {PlayerId}: {PlayerName}",
-                        playerId, mappedPlayer?.DisplayName ?? "Unknown");
-
-                    return mappedPlayer;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to fetch player {PlayerId}", playerId);
+                    _logger.LogWarning("No player data found for {PlayerId}", playerId);
                     return null;
                 }
-            }, TimeSpan.FromHours(4), cancellationToken); // Cache for 4 hours
 
-            return player;
+                var mappedPlayer = MapEspnAthleteToPlayer(playerResponse.Athlete, null);
+
+                if (mappedPlayer != null)
+                {
+                    // Cache the non-null result
+                    await _cacheService.SetAsync(cacheKey, mappedPlayer, TimeSpan.FromHours(4), cancellationToken);
+                }
+
+                _logger.LogDebug("Successfully retrieved player details for {PlayerId}: {PlayerName}",
+                    playerId, mappedPlayer?.DisplayName ?? "Unknown");
+
+                return mappedPlayer;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to fetch player {PlayerId}", playerId);
+                return null;
+            }
         }
 
         private Models.Player? MapEspnAthleteToPlayer(EspnAthlete athlete, string? teamId)

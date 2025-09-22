@@ -136,6 +136,50 @@ namespace ESPNScrape.Services
         }
 
         /// <summary>
+        /// Maps ESPN team abbreviations to database team full names
+        /// </summary>
+        private static string MapEspnTeamToFullName(string espnAbbreviation)
+        {
+            return espnAbbreviation?.ToUpper() switch
+            {
+                "ARI" => "Arizona Cardinals",
+                "ATL" => "Atlanta Falcons",
+                "BAL" => "Baltimore Ravens",
+                "BUF" => "Buffalo Bills",
+                "CAR" => "Carolina Panthers",
+                "CHI" => "Chicago Bears",
+                "CIN" => "Cincinnati Bengals",
+                "CLE" => "Cleveland Browns",
+                "DAL" => "Dallas Cowboys",
+                "DEN" => "Denver Broncos",
+                "DET" => "Detroit Lions",
+                "GB" => "Green Bay Packers",
+                "HOU" => "Houston Texans",
+                "IND" => "Indianapolis Colts",
+                "JAX" => "Jacksonville Jaguars",
+                "KC" => "Kansas City Chiefs",
+                "LAC" => "Los Angeles Chargers",
+                "LAR" => "Los Angeles Rams",
+                "LV" => "Las Vegas Raiders",
+                "MIA" => "Miami Dolphins",
+                "MIN" => "Minnesota Vikings",
+                "NE" => "New England Patriots",
+                "NO" => "New Orleans Saints",
+                "NYG" => "New York Giants",
+                "NYJ" => "New York Jets",
+                "PHI" => "Philadelphia Eagles",
+                "PIT" => "Pittsburgh Steelers",
+                "SEA" => "Seattle Seahawks",
+                "SF" => "San Francisco 49ers",
+                "TB" => "Tampa Bay Buccaneers",
+                "TEN" => "Tennessee Titans",
+                "WAS" => "Washington Commanders",
+                "WSH" => "Washington Commanders", // ESPN sometimes uses WSH
+                _ => espnAbbreviation ?? string.Empty
+            };
+        }
+
+        /// <summary>
         /// Transform a single ESPN player stats object to database format
         /// </summary>
         public async Task<DatabasePlayerStats> TransformPlayerStatsAsync(PlayerStats espnStats, CancellationToken cancellationToken = default)
@@ -153,7 +197,7 @@ namespace ESPNScrape.Services
                 EspnGameId = espnStats.GameId,
                 Name = espnStats.DisplayName,
                 PlayerCode = GeneratePlayerCode(espnStats),
-                Team = espnStats.Team?.Abbreviation ?? string.Empty,
+                Team = MapEspnTeamToFullName(espnStats.Team?.Abbreviation ?? string.Empty),
                 Season = espnStats.Season,
                 Week = espnStats.Week,
                 SeasonType = espnStats.SeasonType,
