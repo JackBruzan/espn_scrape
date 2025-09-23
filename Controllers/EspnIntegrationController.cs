@@ -19,19 +19,22 @@ public class EspnIntegrationController : ControllerBase
     private readonly IEspnPlayerMatchingService _playerMatchingService;
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IConfiguration _configuration;
+    private readonly IEspnScheduleService _scheduleService;
 
     public EspnIntegrationController(
         ILogger<EspnIntegrationController> logger,
         IEspnDataSyncService dataSyncService,
         IEspnPlayerMatchingService playerMatchingService,
         ISchedulerFactory schedulerFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IEspnScheduleService scheduleService)
     {
         _logger = logger;
         _dataSyncService = dataSyncService;
         _playerMatchingService = playerMatchingService;
         _schedulerFactory = schedulerFactory;
         _configuration = configuration;
+        _scheduleService = scheduleService;
     }
 
     /// <summary>
@@ -498,6 +501,106 @@ public class EspnIntegrationController : ControllerBase
 
         return metrics;
     }
+
+    /// <summary>
+    /// Trigger manual schedule scraping for current or specific week
+    /// </summary>
+    /// <param name="request">Schedule scraping parameters</param>
+    /// <returns>Job execution result</returns>
+    [HttpPost("sync/schedule")]
+    public async Task<ActionResult<JobExecutionResult>> TriggerScheduleSync([FromBody] ScheduleSyncRequest? request = null)
+    {
+        try
+        {
+            _logger.LogInformation("Manual schedule sync triggered via API");
+
+            var scheduler = await _schedulerFactory.GetScheduler();
+            var jobKey = new JobKey("EspnScheduleScrapingJob");
+
+            // Create job data map with parameters
+            var jobDataMap = new JobDataMap();
+
+            if (request != null)
+            {
+                if (request.Year > 0) jobDataMap["Year"] = request.Year;
+                if (request.Week > 0) jobDataMap["Week"] = request.Week;
+                if (request.SeasonType > 0) jobDataMap["SeasonType"] = request.SeasonType;
+            }
+
+            // Trigger the job manually
+            await scheduler.TriggerJob(jobKey, jobDataMap);
+
+            var result = new JobExecutionResult
+            {
+                JobKey = jobKey.ToString(),
+                TriggeredAt = DateTime.UtcNow,
+                Message = $"Schedule scraping job triggered successfully" +
+                         (request?.Year > 0 ? $" for Year {request.Year}, Week {request.Week}" : " for current week")
+            };
+
+            _logger.LogInformation("Schedule scraping job triggered successfully");
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to trigger schedule scraping job");
+            return StatusCode(500, new { message = "Failed to trigger schedule scraping", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Test the new ESPN Core API schedule retrieval directly
+    /// </summary>
+    /// <param name="year">Year (defaults to current year)</param>
+    /// <param name="week">Week (defaults to 1)</param>
+    /// <param name="seasonType">Season type (defaults to 2 for regular season)</param>
+    /// <returns>Schedule data from ESPN Core API</returns>
+    [HttpGet("test/schedule-api")]
+    public async Task<ActionResult<object>> TestScheduleApi(
+        [FromQuery] int? year = null,
+        [FromQuery] int? week = null,
+        [FromQuery] int? seasonType = null)
+    {
+        try
+        {
+            var currentYear = year ?? DateTime.Now.Year;
+            var currentWeek = week ?? 1;
+            var currentSeasonType = seasonType ?? 2;
+
+            _logger.LogInformation("Testing ESPN Core API schedule retrieval for Year: {Year}, Week: {Week}, SeasonType: {SeasonType}",
+                currentYear, currentWeek, currentSeasonType);
+
+            var schedules = await _scheduleService.GetWeeklyScheduleFromApiAsync(currentYear, currentWeek, currentSeasonType);
+
+            var result = new
+            {
+                Success = true,
+                Year = currentYear,
+                Week = currentWeek,
+                SeasonType = currentSeasonType,
+                ScheduleCount = schedules.Count(),
+                Schedules = schedules.Take(3).Select(s => new
+                {
+                    s.GameTime,
+                    s.HomeTeamName,
+                    s.AwayTeamName,
+                    s.EspnCompetitionId,
+                    s.HomeMoneyline,
+                    s.AwayMoneyline,
+                    s.BettingProvider
+                })
+            };
+
+            _logger.LogInformation("Successfully retrieved {Count} games via ESPN Core API", schedules.Count());
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to test ESPN Core API schedule retrieval");
+            return StatusCode(500, new { success = false, message = "Failed to retrieve schedule via ESPN Core API", error = ex.Message });
+        }
+    }
 }
 
 // DTOs for API responses
@@ -517,6 +620,13 @@ public class HistoricalSyncRequest
     public int? EndWeek { get; set; }
     public string? StartDate { get; set; }
     public string? EndDate { get; set; }
+}
+
+public class ScheduleSyncRequest
+{
+    public int Year { get; set; }
+    public int Week { get; set; }
+    public int SeasonType { get; set; } = 2; // Default to regular season
 }
 
 public class JobExecutionResult

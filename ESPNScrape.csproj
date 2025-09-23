@@ -33,5 +33,6 @@
         <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.0" />
         <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="8.0.0" />
         <PackageReference Include="Supabase" Version="1.0.0" />
+        <PackageReference Include="HtmlAgilityPack" Version="1.11.52" />
     </ItemGroup>
 </Project>

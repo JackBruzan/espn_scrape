@@ -25,6 +25,9 @@ public interface ISupabaseDatabaseService
     Task<List<SyncReport>> GetSyncHistoryAsync(int limit = 50, SyncType? syncType = null, CancellationToken cancellationToken = default);
     Task<SyncMetrics> GetSyncMetricsAsync(DateTime? fromDate = null, DateTime? toDate = null, CancellationToken cancellationToken = default);
     Task UpdateSyncMetricsAsync(DateTime date, SyncResult syncResult, CancellationToken cancellationToken = default);
+
+    // Schedule operations
+    Task<bool> SaveScheduleAsync(ScheduleRecord schedule, CancellationToken cancellationToken = default);
 }
 
 public class SupabaseConfiguration
@@ -817,6 +820,66 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
             "TENNESSEE TITANS" => "TEN",
             _ => "FA"  // Default to Free Agent for unknown teams
         };
+    }
+
+    public async Task<bool> SaveScheduleAsync(ScheduleRecord schedule, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogDebug("Saving schedule record for game {EspnGameId}: Team {AwayTeamId} @ Team {HomeTeamId}",
+                schedule.espn_game_id, schedule.away_team_id, schedule.home_team_id);
+
+            // Check if schedule already exists
+            var existingSchedule = await _supabaseClient
+                .From<ScheduleRecord>()
+                .Where(s => s.espn_game_id == schedule.espn_game_id)
+                .Get();
+
+            if (existingSchedule?.Models?.Any() == true)
+            {
+                // Update existing record
+                var existing = existingSchedule.Models.First();
+                existing.home_team_id = schedule.home_team_id;
+                existing.away_team_id = schedule.away_team_id;
+                existing.game_time = schedule.game_time;
+                existing.week = schedule.week;
+                existing.year = schedule.year;
+                existing.season_type = schedule.season_type;
+                existing.betting_line = schedule.betting_line;
+                existing.over_under = schedule.over_under;
+                existing.home_implied_points = schedule.home_implied_points;
+                existing.away_implied_points = schedule.away_implied_points;
+                existing.updated_at = DateTime.UtcNow;
+
+                var updateResult = await _supabaseClient
+                    .From<ScheduleRecord>()
+                    .Update(existing);
+
+                _logger.LogDebug("Updated existing schedule record for game {EspnGameId}",
+                    schedule.espn_game_id);
+                return updateResult?.Models?.Any() == true;
+            }
+            else
+            {
+                // Insert new record
+                schedule.created_at = DateTime.UtcNow;
+                schedule.updated_at = DateTime.UtcNow;
+
+                var insertResult = await _supabaseClient
+                    .From<ScheduleRecord>()
+                    .Insert(schedule);
+
+                _logger.LogDebug("Inserted new schedule record for game {EspnGameId}",
+                    schedule.espn_game_id);
+                return insertResult?.Models?.Any() == true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to save schedule for game {EspnGameId}. Error: {ErrorMessage}",
+                schedule.espn_game_id, ex.Message);
+            return false;
+        }
     }
 
     #endregion

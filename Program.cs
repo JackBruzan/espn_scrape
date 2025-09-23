@@ -89,6 +89,9 @@ try
     // Register ESPN Data Sync Service
     builder.Services.AddScoped<IEspnDataSyncService, EspnDataSyncService>();
 
+    // Register ESPN Schedule Service
+    builder.Services.AddScoped<IEspnScheduleService, EspnScheduleService>();
+
     // Register logging and monitoring services
     builder.Services.AddSingleton<IEspnLoggingService, EspnLoggingService>();
     builder.Services.AddSingleton<IEspnMetricsService, EspnMetricsService>();
@@ -96,6 +99,15 @@ try
 
     // Register Main ESPN API Service
     builder.Services.AddScoped<IEspnApiService, EspnApiService>();
+
+    // Register ESPN Core API Service for schedule and odds data
+    builder.Services.AddScoped<IEspnCoreApiService, EspnCoreApiService>();
+
+    // Register ESPN API Data Mapping Service
+    builder.Services.AddScoped<EspnApiDataMappingService>();
+
+    // Register ESPN Team Mapping Service
+    builder.Services.AddSingleton<EspnTeamMappingService>();
 
     // Add ASP.NET Core services for diagnostic endpoints
     builder.Services.AddControllers();
@@ -211,6 +223,22 @@ try
             .DisallowConcurrentExecution() // Prevent concurrent execution
             .StoreDurably() // Allow job to exist without triggers for manual execution
             .WithDescription("ESPN Historical data backfill - Manual trigger only"));
+
+        // Create a "key" for the ESPN Schedule Scraping job
+        var scheduleJobKey = new JobKey("EspnScheduleScrapingJob");
+
+        // Register the ESPN Schedule Scraping job with the DI container
+        q.AddJob<EspnScheduleScrapingJob>(opts => opts
+            .WithIdentity(scheduleJobKey)
+            .DisallowConcurrentExecution() // Prevent concurrent execution
+            .StoreDurably()); // Allow job to exist without triggers during off-season
+
+        // Create a trigger for the ESPN Schedule Scraping job (Every 4 hours)
+        q.AddTrigger(opts => opts
+            .ForJob(scheduleJobKey)
+            .WithIdentity("EspnScheduleScrapingJob-4hour-trigger")
+            .WithCronSchedule("0 0 */4 * * ?") // Every 4 hours
+            .WithDescription("ESPN Schedule scraping - Every 4 hours"));
 
         // Optional: Add development triggers for the integration jobs
         if (builder.Environment.IsDevelopment())
