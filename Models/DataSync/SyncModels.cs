@@ -82,7 +82,7 @@ namespace ESPNScrape.Models.DataSync
         /// <summary>
         /// Number of records to process in each batch
         /// </summary>
-        public int BatchSize { get; set; } = 100;
+        public int BatchSize { get; set; } = 200;
 
         /// <summary>
         /// Perform a dry run without making changes
@@ -118,6 +118,12 @@ namespace ESPNScrape.Models.DataSync
         /// Skip records that fail validation instead of failing the entire sync
         /// </summary>
         public bool SkipInvalidRecords { get; set; } = true;
+
+        /// <summary>
+        /// Filter to sync only specific player names (for debugging)
+        /// If not null/empty, only players whose names contain this string will be synced
+        /// </summary>
+        public string? PlayerNameFilter { get; set; } = null;
 
         /// <summary>
         /// Create backup before making changes
@@ -820,6 +826,16 @@ namespace ESPNScrape.Models.DataSync
         /// General/Other statistics as JSONB
         /// </summary>
         public object? General { get; set; }
+
+        /// <summary>
+        /// Total number of fumbles by the player in this game
+        /// </summary>
+        public int? Fumbles { get; set; }
+
+        /// <summary>
+        /// Number of fumbles lost by the player in this game
+        /// </summary>
+        public int? FumblesLost { get; set; }
 
         /// <summary>
         /// Timestamp when record was created

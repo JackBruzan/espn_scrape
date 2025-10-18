@@ -1,8 +1,7 @@
 using ESPNScrape.Models.Espn;
 using ESPNScrape.Models.DataSync;
 using ESPNScrape.Services.Interfaces;
-using Microsoft.Extensions.Logging;
-using System.Text.Json;
+
 
 namespace ESPNScrape.Services
 {
@@ -30,8 +29,10 @@ namespace ESPNScrape.Services
             { "attempts", "passing" },
             { "comp-att", "passing" },
             { "C/ATT", "passing" },
+            { "interceptions", "passing" }, // ESPN QB interceptions from standard stats array
 
             // Rushing stats
+            { "rushingAttempts", "rushing" },
             { "rushingCarries", "rushing" },
             { "rushingYards", "rushing" },
             { "rushingTouchdowns", "rushing" },
@@ -54,7 +55,7 @@ namespace ESPNScrape.Services
             { "soloTackles", "defensive" },
             { "assistTackles", "defensive" },
             { "sacks", "defensive" },
-            { "interceptions", "defensive" },
+            { "defensiveInterceptions", "defensive" },
             { "passesDefended", "defensive" },
             { "forcedFumbles", "defensive" },
             { "fumbleRecoveries", "defensive" },
@@ -67,6 +68,8 @@ namespace ESPNScrape.Services
             { "extraPointsAttempted", "kicking" },
             { "fieldGoals", "kicking" },
             { "extraPoints", "kicking" },
+            { "fieldgoalsmade_fieldgoalattempts", "kicking" },
+            { "extrapointsmade_extrapointattempts", "kicking" },
 
             // Punting stats
             { "punts", "punting" },
@@ -91,6 +94,7 @@ namespace ESPNScrape.Services
             { "passingLong", (0, 99) },
 
             // Rushing stats validation ranges
+            { "rushingAttempts", (0, 50) },
             { "rushingCarries", (0, 50) },
             { "rushingYards", (-30, 400) },
             { "rushingTouchdowns", (0, 8) },
@@ -127,7 +131,11 @@ namespace ESPNScrape.Services
             { "puntingYards", (0, 1000) },
             { "puntingAverage", (20, 65) },
             { "puntingLong", (20, 90) },
-            { "puntingInside20", (0, 10) }
+            { "puntingInside20", (0, 10) },
+
+            // Fumbles stats validation ranges
+            { "fumbles", (0, 10) },
+            { "fumblesLost", (0, 8) }
         };
 
         public EspnStatsTransformationService(ILogger<EspnStatsTransformationService> logger)
@@ -190,6 +198,9 @@ namespace ESPNScrape.Services
             // Organize stats by category
             var organizedStats = OrganizeStatsByCategory(espnStats.Statistics);
 
+            // Extract fumble statistics
+            var (fumbles, fumblesLost) = ExtractFumbleStats(espnStats.Statistics);
+
             // Create database player stats object
             var dbStats = new DatabasePlayerStats
             {
@@ -213,7 +224,11 @@ namespace ESPNScrape.Services
                 Defensive = organizedStats.Defensive.Any() ? organizedStats.Defensive : null,
                 Kicking = organizedStats.Kicking.Any() ? organizedStats.Kicking : null,
                 Punting = organizedStats.Punting.Any() ? organizedStats.Punting : null,
-                General = organizedStats.General.Any() ? organizedStats.General : null
+                General = organizedStats.General.Any() ? organizedStats.General : null,
+
+                // Add fumble statistics
+                Fumbles = fumbles > 0 ? fumbles : null,
+                FumblesLost = fumblesLost > 0 ? fumblesLost : null
             };
 
             _logger.LogDebug("Successfully transformed player stats for Player: {PlayerName}", espnStats.DisplayName);
@@ -372,13 +387,20 @@ namespace ESPNScrape.Services
                 normalizedName.Contains("catch"))
                 return "receiving";
 
+            // Special handling for "interceptions" - context matters
+            // If it's exactly "interceptions" from QB stats, treat as passing
+            // This handles ESPN's standard QB stats array where they use "interceptions"
+            if (normalizedName == "interceptions")
+                return "passing";
+
             if (normalizedName.Contains("sack") || normalizedName.Contains("tackle") ||
                 normalizedName.Contains("int") || normalizedName.Contains("fumble") ||
                 normalizedName.Contains("def"))
                 return "defensive";
 
             if (normalizedName.Contains("kick") || normalizedName.Contains("fg") ||
-                normalizedName.Contains("xp") || normalizedName.Contains("extra"))
+                normalizedName.Contains("xp") || normalizedName.Contains("extra") ||
+                normalizedName.Contains("fieldgoal") || normalizedName.Contains("extrapoint"))
                 return "kicking";
 
             if (normalizedName.Contains("punt"))
@@ -464,6 +486,30 @@ namespace ESPNScrape.Services
             var lowerName = statName.ToLower();
             return lowerName.Contains("yard") || lowerName.Contains("total") ||
                    lowerName.Contains("season") || lowerName.Contains("career");
+        }
+
+        /// <summary>
+        /// Extract fumbles and fumbles lost from ESPN player statistics
+        /// </summary>
+        private (int fumbles, int fumblesLost) ExtractFumbleStats(List<PlayerStatistic> statistics)
+        {
+            var fumbles = 0;
+            var fumblesLost = 0;
+
+            foreach (var stat in statistics)
+            {
+                switch (stat.Name.ToLower())
+                {
+                    case "fumbles":
+                        fumbles = (int)Math.Round(stat.Value);
+                        break;
+                    case "fumbleslost":
+                        fumblesLost = (int)Math.Round(stat.Value);
+                        break;
+                }
+            }
+
+            return (fumbles, fumblesLost);
         }
 
         #endregion

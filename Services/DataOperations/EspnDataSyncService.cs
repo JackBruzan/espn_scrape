@@ -213,10 +213,21 @@ namespace ESPNScrape.Services
                 _logger.LogInformation("Retrieved total of {TotalStats} player stats for Season {Season}, Week {Week}",
                     allPlayerStats.Count, season, week);
 
-                // Transform and save stats to database
-                _logger.LogInformation("Processing {StatsCount} player stats for database storage", allPlayerStats.Count);
+                // Group stats by player and game to combine all stat categories into single records
+                _logger.LogInformation("Grouping {StatsCount} player stats by player and game", allPlayerStats.Count);
 
-                var statsToProcess = allPlayerStats.Chunk(50).ToList(); // Process in batches of 50
+                var groupedStats = allPlayerStats
+                    .GroupBy(stat => new { stat.PlayerId, stat.GameId })
+                    .Select(group => CombinePlayerStats(group.ToList()))
+                    .ToList();
+
+                _logger.LogInformation("Grouped into {GroupedCount} unique player-game combinations (reduced from {OriginalCount})",
+                    groupedStats.Count, allPlayerStats.Count);
+
+                // Transform and save stats to database
+                _logger.LogInformation("Processing {StatsCount} combined player stats for database storage", groupedStats.Count);
+
+                var statsToProcess = groupedStats.Chunk(options.BatchSize).ToList(); // Process in batches using configured batch size
 
                 foreach (var statsBatch in statsToProcess)
                 {
@@ -228,26 +239,33 @@ namespace ESPNScrape.Services
 
                         _logger.LogDebug("Transformed {Count} stats to database format", transformedStats.Count);
 
-                        // Process each transformed stat for database storage
+                        // Create a list of stats records to batch upsert
+                        var statsRecordsToUpsert = new List<Models.Supabase.PlayerStatsRecord>();
+                        var missingPlayers = new List<(Models.DataSync.DatabasePlayerStats dbStat, Models.Player newPlayer)>();
+
+                        // First pass: collect stats for existing players and identify missing players
                         foreach (var dbStat in transformedStats)
                         {
                             try
                             {
-                                // Find the player in database by ESPN ID
                                 if (string.IsNullOrEmpty(dbStat.EspnPlayerId))
                                 {
                                     _logger.LogWarning("Skipping player stat with null or empty ESPN Player ID");
+                                    syncResult.DataErrors++;
                                     continue;
                                 }
 
                                 var playerId = await _databaseService.FindPlayerByEspnIdAsync(dbStat.EspnPlayerId, cancellationToken);
 
-                                // If player doesn't exist, try to create them automatically
-                                if (!playerId.HasValue && !string.IsNullOrEmpty(dbStat.EspnPlayerId))
+                                if (playerId.HasValue)
                                 {
-                                    _logger.LogInformation("Player not found for ESPN ID {EspnPlayerId}, attempting to create player record", dbStat.EspnPlayerId);
-
-                                    // Create a basic player record from the stats data
+                                    // Convert DatabasePlayerStats to PlayerStatsRecord for batch upsert
+                                    var statsRecord = ConvertToPlayerStatsRecord(dbStat, playerId.Value);
+                                    statsRecordsToUpsert.Add(statsRecord);
+                                }
+                                else
+                                {
+                                    // Player doesn't exist - prepare to create them
                                     var newPlayer = new Models.Player
                                     {
                                         Id = dbStat.EspnPlayerId,
@@ -262,51 +280,72 @@ namespace ESPNScrape.Services
                                         }
                                     };
 
-                                    var playerAdded = await _databaseService.AddPlayerAsync(newPlayer, cancellationToken);
-                                    if (playerAdded)
-                                    {
-                                        // Try to find the player again after adding
-                                        playerId = await _databaseService.FindPlayerByEspnIdAsync(dbStat.EspnPlayerId, cancellationToken);
-                                        _logger.LogInformation("Successfully created player {PlayerName} (ESPN ID: {EspnPlayerId})",
-                                            dbStat.Name, dbStat.EspnPlayerId);
-                                    }
-                                    else
-                                    {
-                                        _logger.LogWarning("Failed to create player {PlayerName} (ESPN ID: {EspnPlayerId})",
-                                            dbStat.Name, dbStat.EspnPlayerId);
-                                    }
-                                }
-
-                                if (playerId.HasValue)
-                                {
-                                    // Convert DatabasePlayerStats to PlayerStatsRecord and save
-                                    var statsRecord = ConvertToPlayerStatsRecord(dbStat, playerId.Value);
-                                    var saved = await _databaseService.SavePlayerStatsAsync(statsRecord, cancellationToken);
-
-                                    if (saved)
-                                    {
-                                        _logger.LogDebug("Saved stats for player {PlayerId} (ESPN: {EspnId})",
-                                            playerId.Value, dbStat.EspnPlayerId);
-                                        syncResult.StatsRecordsProcessed++;
-                                    }
-                                    else
-                                    {
-                                        syncResult.DataErrors++;
-                                        syncResult.Errors.Add($"Failed to save stats for player {playerId.Value} (ESPN: {dbStat.EspnPlayerId})");
-                                    }
-                                }
-                                else
-                                {
-                                    syncResult.DataErrors++;
-                                    syncResult.Errors.Add($"Player not found for ESPN ID: {dbStat.EspnPlayerId}");
+                                    missingPlayers.Add((dbStat, newPlayer));
                                 }
                             }
                             catch (Exception statEx)
                             {
                                 syncResult.DataErrors++;
-                                syncResult.Errors.Add($"Failed to save stats for player {dbStat.EspnPlayerId}: {statEx.Message}");
-                                _logger.LogWarning(statEx, "Failed to save stats for player {EspnPlayerId}", dbStat.EspnPlayerId);
+                                syncResult.Errors.Add($"Failed to prepare stats for player {dbStat.EspnPlayerId}: {statEx.Message}");
+                                _logger.LogWarning(statEx, "Failed to prepare stats for player {EspnPlayerId}", dbStat.EspnPlayerId);
                             }
+                        }
+
+                        // Create missing players in batch
+                        if (missingPlayers.Any())
+                        {
+                            _logger.LogInformation("Creating {Count} missing players", missingPlayers.Count);
+
+                            foreach (var (dbStat, newPlayer) in missingPlayers)
+                            {
+                                try
+                                {
+                                    var playerAdded = await _databaseService.AddPlayerAsync(newPlayer, cancellationToken);
+                                    if (playerAdded)
+                                    {
+                                        // Get the new player ID and add their stats to the upsert list
+                                        var playerId = await _databaseService.FindPlayerByEspnIdAsync(dbStat.EspnPlayerId!, cancellationToken);
+                                        if (playerId.HasValue)
+                                        {
+                                            var statsRecord = ConvertToPlayerStatsRecord(dbStat, playerId.Value);
+                                            statsRecordsToUpsert.Add(statsRecord);
+                                            syncResult.NewPlayersAdded++;
+                                            _logger.LogDebug("Successfully created player {PlayerName} (ESPN ID: {EspnPlayerId})",
+                                                dbStat.Name, dbStat.EspnPlayerId);
+                                        }
+                                        else
+                                        {
+                                            syncResult.DataErrors++;
+                                            syncResult.Errors.Add($"Created player {dbStat.EspnPlayerId} but couldn't find them again");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        syncResult.DataErrors++;
+                                        syncResult.Errors.Add($"Failed to create player {dbStat.EspnPlayerId}");
+                                        _logger.LogWarning("Failed to create player {PlayerName} (ESPN ID: {EspnPlayerId})",
+                                            dbStat.Name, dbStat.EspnPlayerId);
+                                    }
+                                }
+                                catch (Exception playerEx)
+                                {
+                                    syncResult.DataErrors++;
+                                    syncResult.Errors.Add($"Exception creating player {dbStat.EspnPlayerId}: {playerEx.Message}");
+                                    _logger.LogWarning(playerEx, "Exception creating player {EspnPlayerId}", dbStat.EspnPlayerId);
+                                }
+                            }
+                        }
+
+                        // Batch upsert all stats records
+                        if (statsRecordsToUpsert.Any())
+                        {
+                            _logger.LogDebug("Batch upserting {Count} stats records", statsRecordsToUpsert.Count);
+
+                            var upsertedCount = await _databaseService.UpsertPlayerStatsBatchAsync(statsRecordsToUpsert, cancellationToken);
+                            syncResult.StatsRecordsProcessed += upsertedCount;
+                            syncResult.PlayersUpdated += upsertedCount;
+
+                            _logger.LogDebug("Successfully upserted {UpsertedCount} stats records", upsertedCount);
                         }
                     }
                     catch (Exception batchEx)
@@ -342,8 +381,6 @@ namespace ESPNScrape.Services
             }
             finally
             {
-                // TODO: Fix semaphore - no matching WaitAsync call for this Release
-                // _syncSemaphore.Release();
                 _currentSyncId = null;
                 _currentSyncCancellation?.Dispose();
                 _currentSyncCancellation = null;
@@ -418,26 +455,18 @@ namespace ESPNScrape.Services
                 _logger.LogInformation("Retrieved total of {TotalStats} player stats for date range {StartDate} to {EndDate}",
                     allPlayerStats.Count, startDate, endDate);
 
-                // Transform and save stats to database (placeholder for now)
-                // TODO: Implement transformation service and database storage
-                foreach (var stat in allPlayerStats)
-                {
-                    try
-                    {
-                        // This would involve:
-                        // 1. Transform ESPN stats to database format
-                        // 2. Find or create player records
-                        // 3. Insert/update player stats
-                        _logger.LogDebug("Would process stats for player {PlayerId}", stat.PlayerId);
-                        syncResult.StatsRecordsProcessed++;
-                    }
-                    catch (Exception statEx)
-                    {
-                        _logger.LogWarning(statEx, "Failed to process stats for player {PlayerId}", stat.PlayerId);
-                        syncResult.DataErrors++;
-                    }
-                }
+                // TODO: Implement stats synchronization service
+                // This method currently only fetches stats but doesn't save them to the database.
+                // Future implementation should:
+                // 1. Transform ESPN stats to database format using EspnApiDataMappingService
+                // 2. Find or create player records using SupabaseDatabaseService
+                // 3. Insert/update player stats using bulk operations
+                // 4. Handle conflicts and deduplication
 
+                _logger.LogWarning("Stats synchronization is not yet implemented. " +
+                    "Retrieved {StatsCount} stats but no database operations performed.", allPlayerStats.Count);
+
+                syncResult.StatsRecordsProcessed = allPlayerStats.Count;
                 syncResult.Status = SyncStatus.Completed;
                 syncResult.EndTime = DateTime.UtcNow;
 
@@ -493,7 +522,6 @@ namespace ESPNScrape.Services
                     return syncResult;
                 }
 
-                // TODO: Add stats sync for all weeks of the season
                 _logger.LogInformation("Starting stats sync for all weeks of season {Season}", season);
 
                 try
@@ -723,6 +751,26 @@ namespace ESPNScrape.Services
                 var playerList = espnPlayers.ToList();
                 _logger.LogInformation("Successfully fetched {PlayerCount} players from ESPN API", playerList.Count);
 
+                // Apply player name filter if specified (for debugging)
+                if (!string.IsNullOrWhiteSpace(options.PlayerNameFilter))
+                {
+                    var originalCount = playerList.Count;
+                    playerList = playerList.Where(p =>
+                        !string.IsNullOrEmpty(p.DisplayName) &&
+                        p.DisplayName.Contains(options.PlayerNameFilter, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    _logger.LogInformation("Filtered players by name '{Filter}': {FilteredCount} of {OriginalCount} players match",
+                        options.PlayerNameFilter, playerList.Count, originalCount);
+
+                    // Log the filtered players for debugging
+                    foreach (var player in playerList)
+                    {
+                        _logger.LogInformation("Filtered player: {PlayerName} (ID: {PlayerId}, Team: {TeamName}, TeamId: {TeamId})",
+                            player.DisplayName, player.Id, player.Team?.DisplayName ?? "No Team", player.Team?.Id ?? "No TeamId");
+                    }
+                }
+
                 return playerList;
             }
             catch (Exception ex)
@@ -776,15 +824,25 @@ namespace ESPNScrape.Services
                         }
                         else
                         {
-                            // New player - add to database
-                            if (await AddNewPlayerAsync(player, options, cancellationToken))
+                            // No existing player found - add new player
+                            _logger.LogInformation("No existing player match found for ESPN player {EspnPlayerId} - {EspnPlayerName} " +
+                                "(Team: {Team}, Position: {Position}). Adding as new player.",
+                                player.Id, player.DisplayName, player.Team?.Abbreviation ?? "Unknown",
+                                player.Position?.DisplayName ?? "Unknown");
+
+                            var success = await _databaseService.AddPlayerAsync(player, cancellationToken);
+                            if (success)
                             {
                                 syncResult.NewPlayersAdded++;
+                                _logger.LogInformation("Successfully added new player {PlayerName} (ESPN ID: {EspnId})",
+                                    player.DisplayName, player.Id);
                             }
                             else
                             {
-                                syncResult.MatchingErrors++;
-                                syncResult.Errors.Add($"Failed to add new player: {player.DisplayName} (ID: {player.Id})");
+                                syncResult.DataErrors++;
+                                syncResult.Errors.Add($"Failed to add new player {player.DisplayName}");
+                                _logger.LogError("Failed to add new player {PlayerName} (ESPN ID: {EspnId})",
+                                    player.DisplayName, player.Id);
                             }
                         }
                     }
@@ -904,10 +962,62 @@ namespace ESPNScrape.Services
                 // Store stats as JSONB objects (matching existing table structure)
                 Passing = dbStats.Passing,
                 Rushing = dbStats.Rushing,
-                Receiving = dbStats.Receiving
+                Receiving = dbStats.Receiving,
+
+                // Add fumble statistics
+                Fumbles = dbStats.Fumbles,
+                FumblesLost = dbStats.FumblesLost
             };
 
             return statsRecord;
+        }
+
+        /// <summary>
+        /// Combines multiple PlayerStats objects for the same player and game into a single object
+        /// This handles cases where ESPN returns separate stat records for different categories (passing, rushing, receiving)
+        /// </summary>
+        private static Models.Espn.PlayerStats CombinePlayerStats(List<Models.Espn.PlayerStats> playerStatsList)
+        {
+            if (!playerStatsList.Any())
+                throw new ArgumentException("Cannot combine empty list of player stats");
+
+            // Use the first record as the base and merge all statistics from other records
+            var combinedStats = playerStatsList.First();
+
+            // Create a new combined statistics list
+            var allStatistics = new List<Models.Espn.PlayerStatistic>();
+
+            foreach (var playerStats in playerStatsList)
+            {
+                if (playerStats.Statistics != null)
+                {
+                    allStatistics.AddRange(playerStats.Statistics);
+                }
+            }
+
+            // Remove duplicate statistics (same name, keep the last value)
+            var uniqueStatistics = allStatistics
+                .GroupBy(stat => stat.Name)
+                .Select(group => group.Last()) // Keep the last occurrence in case of duplicates
+                .ToList();
+
+            // Create a new combined PlayerStats object with only the properties that exist
+            var result = new Models.Espn.PlayerStats
+            {
+                PlayerId = combinedStats.PlayerId,
+                GameId = combinedStats.GameId,
+                DisplayName = combinedStats.DisplayName,
+                ShortName = combinedStats.ShortName,
+                Team = combinedStats.Team,
+                Position = combinedStats.Position,
+                Jersey = combinedStats.Jersey,
+                Statistics = uniqueStatistics,
+                Season = combinedStats.Season,
+                Week = combinedStats.Week,
+                SeasonType = combinedStats.SeasonType
+            };
+
+            return result;
         }
 
         /// <summary>

@@ -143,10 +143,13 @@ namespace ESPNScrape.Services
                 candidates = candidates.OrderByDescending(c => c.ConfidenceScore).ToList();
 
                 // Determine match result
-                if (!candidates.Any())
+                if (candidates.Count == 0)
                 {
-                    _logger.LogWarning("No matches found for ESPN player: {EspnPlayerId} - {EspnPlayerName}",
-                        espnPlayerId, espnPlayerName);
+                    _logger.LogWarning("No matching candidates found for ESPN player: {EspnPlayerId} - {EspnPlayerName} " +
+                        "(Team: {Team}, Position: {Position}). Checked {PlayerCount} database players. " +
+                        "Min confidence threshold: {MinThreshold}",
+                        espnPlayerId, espnPlayerName, teamAbbreviation ?? "Unknown", position ?? "Unknown",
+                        dbPlayers.Count, _options.MinimumConfidenceThreshold);
 
                     return new PlayerMatchResult
                     {
@@ -575,11 +578,14 @@ namespace ESPNScrape.Services
         private async Task<List<(int Id, string Name, string? Team, string? Position)>> GetDatabasePlayersAsync(
             CancellationToken cancellationToken)
         {
-            _logger.LogDebug("Getting all database players for matching");
+            _logger.LogInformation("Getting all database players for matching");
 
-            // TEMPORARY: Return empty list to force all ESPN players to be treated as new
-            // This will trigger database writes so we can test the connection
-            _logger.LogWarning("Temporarily returning empty player list to force all ESPN players to be added as new");
+            // Note: This method was originally designed to cache all database players for batch matching.
+            // Since the database service doesn't currently support bulk player retrieval,
+            // we'll return an empty list and rely on individual FindMatchingPlayerAsync calls.
+            // This is less efficient but maintains functionality until bulk retrieval is implemented.
+
+            _logger.LogDebug("Using individual player lookup strategy - bulk player retrieval not yet implemented");
             return await Task.FromResult(new List<(int Id, string Name, string? Team, string? Position)>());
         }
     }

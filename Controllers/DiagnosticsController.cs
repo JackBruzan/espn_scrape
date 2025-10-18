@@ -1,4 +1,5 @@
-using ESPNScrape.Services;
+using ESPNScrape.Services.Infrastructure.Interfaces;
+using ESPNScrape.Services.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using System.Diagnostics;
@@ -13,19 +14,16 @@ namespace ESPNScrape.Controllers
     [Route("api/[controller]")]
     public class DiagnosticsController : ControllerBase
     {
-        private readonly IEspnMetricsService _metricsService;
-        private readonly IEspnLoggingService _loggingService;
+        private readonly EspnInfrastructureService _infrastructureService;
         private readonly HealthCheckService _healthCheckService;
         private readonly ILogger<DiagnosticsController> _logger;
 
         public DiagnosticsController(
-            IEspnMetricsService metricsService,
-            IEspnLoggingService loggingService,
+            EspnInfrastructureService infrastructureService,
             HealthCheckService healthCheckService,
             ILogger<DiagnosticsController> logger)
         {
-            _metricsService = metricsService;
-            _loggingService = loggingService;
+            _infrastructureService = infrastructureService;
             _healthCheckService = healthCheckService;
             _logger = logger;
         }
@@ -36,7 +34,7 @@ namespace ESPNScrape.Controllers
         [HttpGet("health")]
         public async Task<IActionResult> GetHealth()
         {
-            using var operation = _loggingService.BeginTimedOperation("GetHealth");
+            using var operation = _infrastructureService.BeginTimedOperation("GetHealth");
 
             try
             {
@@ -81,47 +79,34 @@ namespace ESPNScrape.Controllers
         [HttpGet("metrics")]
         public IActionResult GetMetrics([FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null)
         {
-            using var operation = _loggingService.BeginTimedOperation("GetMetrics");
+            using var operation = _infrastructureService.BeginTimedOperation("GetMetrics");
 
             try
             {
-                MetricsSnapshot metrics;
-
-                if (from.HasValue && to.HasValue)
-                {
-                    metrics = _metricsService.GetMetrics(from.Value, to.Value);
-                }
-                else
-                {
-                    metrics = _metricsService.GetCurrentMetrics();
-                }
+                var metrics = _infrastructureService.GetCurrentMetrics();
 
                 var response = new
                 {
                     timestamp = metrics.Timestamp,
-                    fromTime = metrics.FromTime,
-                    toTime = metrics.ToTime,
                     responseTimeMetrics = metrics.ResponseTimeMetrics.ToDictionary(
                         kvp => kvp.Key,
                         kvp => new
                         {
-                            averageResponseTime = kvp.Value.AverageResponseTime.TotalMilliseconds,
-                            maxResponseTime = kvp.Value.MaxResponseTime.TotalMilliseconds,
-                            errorRate = kvp.Value.ErrorRate,
-                            totalRequests = kvp.Value.TotalRequests
+                            averageResponseTime = kvp.Value.AverageResponseTime,
+                            maxResponseTime = kvp.Value.MaxResponseTime,
+                            requestCount = kvp.Value.RequestCount
                         }),
                     cacheMetrics = metrics.CacheMetrics.ToDictionary(
                         kvp => kvp.Key,
                         kvp => new
                         {
                             hitRate = kvp.Value.HitRate,
-                            averageDuration = kvp.Value.AverageDuration.TotalMilliseconds,
-                            totalOperations = kvp.Value.TotalOperations
+                            averageDuration = kvp.Value.AverageDuration
                         }),
                     summary = new
                     {
-                        totalMetricTypes = metrics.RawMetrics.Count,
-                        totalDataPoints = metrics.RawMetrics.Values.Sum(list => list.Count)
+                        totalMetricTypes = metrics.Metrics.Count,
+                        totalDataPoints = metrics.Metrics.Values.Sum(m => m.Count)
                     }
                 };
 
@@ -140,7 +125,7 @@ namespace ESPNScrape.Controllers
         [HttpGet("system")]
         public IActionResult GetSystemInfo()
         {
-            using var operation = _loggingService.BeginTimedOperation("GetSystemInfo");
+            using var operation = _infrastructureService.BeginTimedOperation("GetSystemInfo");
 
             try
             {
@@ -182,7 +167,7 @@ namespace ESPNScrape.Controllers
                 };
 
                 // Record memory usage metric
-                _metricsService.RecordMemoryUsage(process.WorkingSet64);
+                _infrastructureService.RecordMemoryUsage(process.WorkingSet64);
 
                 return Ok(response);
             }
@@ -199,11 +184,11 @@ namespace ESPNScrape.Controllers
         [HttpGet("alerts")]
         public IActionResult GetAlerts()
         {
-            using var operation = _loggingService.BeginTimedOperation("GetAlerts");
+            using var operation = _infrastructureService.BeginTimedOperation("GetAlerts");
 
             try
             {
-                var alerts = _metricsService.CheckAlertConditions();
+                var alerts = _infrastructureService.CheckAlertConditions();
 
                 var response = new
                 {
@@ -213,10 +198,9 @@ namespace ESPNScrape.Controllers
                     alerts = alerts.Select(alert => new
                     {
                         type = alert.Type,
-                        component = alert.Component,
+                        message = alert.Message,
                         currentValue = alert.CurrentValue,
                         threshold = alert.Threshold,
-                        message = alert.Message,
                         timestamp = alert.Timestamp,
                         severity = GetAlertSeverity(alert)
                     })
@@ -224,7 +208,7 @@ namespace ESPNScrape.Controllers
 
                 if (alerts.Any())
                 {
-                    _loggingService.LogBusinessMetric("active_alerts", alerts.Count);
+                    _infrastructureService.LogBusinessMetric("active_alerts", alerts.Count);
                     _logger.LogWarning("Found {AlertCount} active alerts", alerts.Count);
                 }
 
@@ -243,11 +227,11 @@ namespace ESPNScrape.Controllers
         [HttpPost("metrics/reset")]
         public IActionResult ResetMetrics()
         {
-            using var operation = _loggingService.BeginTimedOperation("ResetMetrics");
+            using var operation = _infrastructureService.BeginTimedOperation("ResetMetrics");
 
             try
             {
-                _metricsService.ResetMetrics();
+                _infrastructureService.ResetMetrics();
                 _logger.LogInformation("Metrics have been reset via API call");
 
                 return Ok(new { message = "Metrics reset successfully", timestamp = DateTime.UtcNow });
@@ -265,7 +249,7 @@ namespace ESPNScrape.Controllers
         [HttpGet("config")]
         public IActionResult GetConfiguration()
         {
-            using var operation = _loggingService.BeginTimedOperation("GetConfiguration");
+            using var operation = _infrastructureService.BeginTimedOperation("GetConfiguration");
 
             try
             {
@@ -304,7 +288,7 @@ namespace ESPNScrape.Controllers
         [HttpGet("full-diagnostic")]
         public async Task<IActionResult> GetFullDiagnostic()
         {
-            using var operation = _loggingService.BeginTimedOperation("GetFullDiagnostic");
+            using var operation = _infrastructureService.BeginTimedOperation("GetFullDiagnostic");
 
             try
             {
@@ -312,8 +296,8 @@ namespace ESPNScrape.Controllers
 
                 // Get all diagnostic information
                 var healthTask = _healthCheckService.CheckHealthAsync();
-                var alerts = _metricsService.CheckAlertConditions();
-                var metrics = _metricsService.GetCurrentMetrics();
+                var alerts = _infrastructureService.CheckAlertConditions();
+                var metrics = _infrastructureService.GetCurrentMetrics();
 
                 var healthReport = await healthTask;
                 var process = Process.GetCurrentProcess();
@@ -340,7 +324,7 @@ namespace ESPNScrape.Controllers
                     performance = new
                     {
                         averageApiResponseTime = metrics.ResponseTimeMetrics.Values.Any()
-                            ? metrics.ResponseTimeMetrics.Values.Average(m => m.AverageResponseTime.TotalMilliseconds)
+                            ? metrics.ResponseTimeMetrics.Values.Average(m => m.AverageResponseTime)
                             : 0,
                         overallCacheHitRate = metrics.CacheMetrics.Values.Any()
                             ? metrics.CacheMetrics.Values.Average(m => m.HitRate)
@@ -398,13 +382,13 @@ namespace ESPNScrape.Controllers
                 switch (alert.Type)
                 {
                     case "ErrorRate":
-                        recommendations.Add($"High error rate detected for {alert.Component}. Check logs and service health");
+                        recommendations.Add($"High error rate detected for {alert.Type}. Check logs and service health");
                         break;
                     case "ResponseTime":
-                        recommendations.Add($"Slow response times for {alert.Component}. Consider performance optimization");
+                        recommendations.Add($"Slow response times for {alert.Type}. Consider performance optimization");
                         break;
                     case "CacheHitRate":
-                        recommendations.Add($"Low cache hit rate for {alert.Component}. Review caching strategy");
+                        recommendations.Add($"Low cache hit rate for {alert.Type}. Review caching strategy");
                         break;
                 }
             }

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ESPNScrape.Services
 {
@@ -158,17 +159,36 @@ namespace ESPNScrape.Services
             // Remove common suffixes and prefixes
             name = name.Trim();
 
+            // Handle initials with periods first (before general period removal)
+            // Convert patterns like "C.J." to "CJ", "A.J." to "AJ", etc.
+            name = Regex.Replace(name, @"\b([A-Z])\.\s*([A-Z])\.", "$1$2");
+            name = Regex.Replace(name, @"\b([A-Z])\.\s*([A-Z])\b", "$1$2");
+
+            // Handle single initials with periods: "C." to "C"
+            name = Regex.Replace(name, @"\b([A-Z])\.", "$1");
+
+            // Remove suffixes (Jr, Sr, etc.) - case insensitive and with optional periods
+            name = Regex.Replace(name, @"\s+(Jr\.?|Junior|Sr\.?|Senior|III|II|IV|V|1st|2nd|3rd|4th|5th)\b", "", RegexOptions.IgnoreCase);
+
+            // Remove apostrophes and replace with nothing
+            name = name.Replace("'", "");
+            name = name.Replace("'", ""); // Handle curly apostrophes too
+            name = name.Replace("`", ""); // Handle backticks
+
             // Handle common name variations
             var replacements = new Dictionary<string, string>
             {
-                { "Jr.", "" }, { "Sr.", "" }, { "III", "" }, { "II", "" },
-                { ".", "" }, { "'", "" }, { "-", " " }
+                { "-", " " }, // Convert hyphens to spaces
+                { ".", "" }   // Remove any remaining periods
             };
 
             foreach (var replacement in replacements)
             {
                 name = name.Replace(replacement.Key, replacement.Value);
             }
+
+            // Remove any remaining periods
+            name = name.Replace(".", "");
 
             // Normalize multiple spaces to single space
             while (name.Contains("  "))

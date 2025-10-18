@@ -566,11 +566,23 @@ namespace ESPNScrape.Services
                     }
                 }
 
-                // Extract statistics
+                // Extract statistics - stats are arrays at athlete level in ESPN format
                 if (athleteElement.TryGetProperty("stats", out var statsElement))
                 {
-                    var statistics = ParseStatisticsFromElement(statsElement);
-                    playerStats.Statistics.AddRange(statistics);
+                    if (statsElement.ValueKind == JsonValueKind.Array)
+                    {
+                        _logger.LogInformation("Found ESPN athlete stats array format");
+                        // ESPN format: stats are arrays at athlete level
+                        var statistics = HandleStatsArrayWithoutKeys(statsElement);
+                        playerStats.Statistics.AddRange(statistics);
+                    }
+                    else
+                    {
+                        // Fallback for legacy object format
+                        _logger.LogInformation("Using legacy object parsing for stats");
+                        var statistics = ParseStatisticsFromElement(statsElement);
+                        playerStats.Statistics.AddRange(statistics);
+                    }
                 }
 
                 // Normalize player name
@@ -594,6 +606,7 @@ namespace ESPNScrape.Services
 
             try
             {
+                // Fallback to original object format parsing
                 foreach (var statProperty in statsElement.EnumerateObject())
                 {
                     var statName = statProperty.Name;
@@ -629,6 +642,134 @@ namespace ESPNScrape.Services
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to parse some statistics from element");
+            }
+
+            return statistics;
+        }
+
+        private List<PlayerStatistic> HandleStatsArrayWithoutKeys(JsonElement statsArray)
+        {
+            var statistics = new List<PlayerStatistic>();
+
+            try
+            {
+                if (statsArray.ValueKind != JsonValueKind.Array)
+                {
+                    return statistics;
+                }
+
+                // ESPN typically uses this standard order for QB stats
+                var standardKeys = new[]
+                {
+                    "completions/passingAttempts",
+                    "passingYards",
+                    "yardsPerPassAttempt",
+                    "passingTouchdowns",
+                    "interceptions",
+                    "sacks-sackYardsLost",
+                    "adjQBR",
+                    "QBRating"
+                };
+
+                var stats = statsArray.EnumerateArray().ToArray();
+
+                for (int i = 0; i < Math.Min(stats.Length, standardKeys.Length); i++)
+                {
+                    var statValue = stats[i];
+                    var statKey = standardKeys[i];
+                    var statDisplayValue = statValue.GetString() ?? "";
+
+                    // Handle combined stats like "16/28" for completions/passingAttempts
+                    if (statKey == "completions/passingAttempts" && statDisplayValue.Contains("/"))
+                    {
+                        var parts = statDisplayValue.Split('/');
+                        if (parts.Length == 2)
+                        {
+                            // Add completions
+                            if (decimal.TryParse(parts[0], out var completions))
+                            {
+                                statistics.Add(new PlayerStatistic
+                                {
+                                    Name = "completions",
+                                    DisplayName = "Completions",
+                                    Category = DetermineStatCategory("completions"),
+                                    Value = completions,
+                                    DisplayValue = parts[0]
+                                });
+                            }
+
+                            // Add passing attempts
+                            if (decimal.TryParse(parts[1], out var attempts))
+                            {
+                                statistics.Add(new PlayerStatistic
+                                {
+                                    Name = "passingAttempts",
+                                    DisplayName = "Passing Attempts",
+                                    Category = DetermineStatCategory("passingAttempts"),
+                                    Value = attempts,
+                                    DisplayValue = parts[1]
+                                });
+                            }
+
+                            // Add combined stat for completions_passingattempts
+                            statistics.Add(new PlayerStatistic
+                            {
+                                Name = "completions_passingattempts",
+                                DisplayName = "Completions/Attempts",
+                                Category = DetermineStatCategory("completions_passingattempts"),
+                                Value = completions,
+                                DisplayValue = statDisplayValue
+                            });
+                        }
+                    }
+                    // Handle sacks like "1-3" for sacks-sackYardsLost
+                    else if (statKey == "sacks-sackYardsLost" && statDisplayValue.Contains("-"))
+                    {
+                        var parts = statDisplayValue.Split('-');
+                        if (parts.Length == 2)
+                        {
+                            if (decimal.TryParse(parts[0], out var sacks))
+                            {
+                                statistics.Add(new PlayerStatistic
+                                {
+                                    Name = "sacks",
+                                    DisplayName = "Sacks",
+                                    Category = DetermineStatCategory("sacks"),
+                                    Value = sacks,
+                                    DisplayValue = parts[0]
+                                });
+                            }
+
+                            if (decimal.TryParse(parts[1], out var sackYards))
+                            {
+                                statistics.Add(new PlayerStatistic
+                                {
+                                    Name = "sackYardsLost",
+                                    DisplayName = "Sack Yards Lost",
+                                    Category = DetermineStatCategory("sackYardsLost"),
+                                    Value = sackYards,
+                                    DisplayValue = parts[1]
+                                });
+                            }
+                        }
+                    }
+                    // Handle regular numeric stats
+                    else if (decimal.TryParse(statDisplayValue, out var numericValue))
+                    {
+                        statistics.Add(new PlayerStatistic
+                        {
+                            Name = statKey.Replace("/", "").Replace("-", ""), // Clean up the key name
+                            DisplayName = FormatStatDisplayName(statKey),
+                            Category = DetermineStatCategory(statKey),
+                            Value = numericValue,
+                            DisplayValue = statDisplayValue
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse statistics from array without keys: {Error}", ex.Message);
             }
 
             return statistics;
@@ -731,9 +872,16 @@ namespace ESPNScrape.Services
                 return "rushing";
             if (lowerStatName.Contains("rec") || lowerStatName.Contains("target"))
                 return "receiving";
+
+            // Special case: "interceptions" in QB stats context should be passing, not defensive
+            // This happens when ESPN returns QB interceptions in their standard stats array
+            if (lowerStatName == "interceptions")
+                return "passing";
+
             if (lowerStatName.Contains("sack") || lowerStatName.Contains("tackle") || lowerStatName.Contains("int"))
                 return "defensive";
-            if (lowerStatName.Contains("kick") || lowerStatName.Contains("fg") || lowerStatName.Contains("xp"))
+            if (lowerStatName.Contains("kick") || lowerStatName.Contains("fg") || lowerStatName.Contains("xp") ||
+                lowerStatName.Contains("fieldgoal") || lowerStatName.Contains("extrapoint"))
                 return "kicking";
             if (lowerStatName.Contains("punt"))
                 return "punting";

@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ESPNScrape.Services.Interfaces;
-using ESPNScrape.Services;
+using ESPNScrape.Services.Infrastructure;
 using ESPNScrape.Models.DataSync;
 using System.Text.Json;
 
@@ -15,21 +15,18 @@ namespace ESPNScrape.Controllers
     public class MonitoringController : ControllerBase
     {
         private readonly ILogger<MonitoringController> _logger;
-        private readonly IEspnMetricsService _metricsService;
-        private readonly IEspnAlertingService _alertingService;
+        private readonly EspnInfrastructureService _infrastructureService;
         private readonly IEspnDataSyncService _dataSyncService;
         private readonly HealthCheckService _healthCheckService;
 
         public MonitoringController(
             ILogger<MonitoringController> logger,
-            IEspnMetricsService metricsService,
-            IEspnAlertingService alertingService,
+            EspnInfrastructureService infrastructureService,
             IEspnDataSyncService dataSyncService,
             HealthCheckService healthCheckService)
         {
             _logger = logger;
-            _metricsService = metricsService;
-            _alertingService = alertingService;
+            _infrastructureService = infrastructureService;
             _dataSyncService = dataSyncService;
             _healthCheckService = healthCheckService;
         }
@@ -87,7 +84,7 @@ namespace ESPNScrape.Controllers
         {
             try
             {
-                var metrics = _metricsService.GetCurrentMetrics();
+                var metrics = _infrastructureService.GetCurrentMetrics();
                 return Ok(metrics);
             }
             catch (Exception ex)
@@ -115,7 +112,7 @@ namespace ESPNScrape.Controllers
                     return BadRequest(new { error = "Time range too large", message = "Maximum time range is 7 days" });
                 }
 
-                var metrics = _metricsService.GetMetrics(from, to);
+                var metrics = _infrastructureService.GetMetrics(from, to);
                 return Ok(metrics);
             }
             catch (Exception ex)
@@ -133,7 +130,7 @@ namespace ESPNScrape.Controllers
         {
             try
             {
-                _metricsService.ResetMetrics();
+                _infrastructureService.ResetMetrics();
                 _logger.LogInformation("Metrics reset by user request");
                 return Ok(new { message = "Metrics reset successfully", timestamp = DateTime.UtcNow });
             }
@@ -159,7 +156,7 @@ namespace ESPNScrape.Controllers
 
                 // Use GetAlertHistory since GetRecentAlertsAsync doesn't exist in the interface
                 var fromTime = DateTime.UtcNow.AddHours(-hours);
-                var alerts = _alertingService.GetAlertHistory(fromTime);
+                var alerts = _infrastructureService.GetAlertHistory(fromTime);
                 return Ok(alerts);
             }
             catch (Exception ex)
@@ -177,7 +174,7 @@ namespace ESPNScrape.Controllers
         {
             try
             {
-                var activeAlerts = _alertingService.GetActiveAlerts();
+                var activeAlerts = _infrastructureService.GetActiveAlerts();
                 return Ok(activeAlerts);
             }
             catch (Exception ex)
@@ -195,7 +192,7 @@ namespace ESPNScrape.Controllers
         {
             try
             {
-                var statistics = await _alertingService.GetAlertStatisticsAsync();
+                var statistics = await _infrastructureService.GetAlertStatisticsAsync();
                 return Ok(statistics);
             }
             catch (Exception ex)
@@ -221,14 +218,13 @@ namespace ESPNScrape.Controllers
                 var alertCondition = new AlertCondition
                 {
                     Type = request.Type,
-                    Component = request.Component ?? "Manual",
                     CurrentValue = request.CurrentValue ?? 0,
                     Threshold = request.Threshold ?? 1,
                     Message = request.Message,
                     Timestamp = DateTime.UtcNow
                 };
 
-                await _alertingService.SendAlertAsync(alertCondition);
+                await _infrastructureService.SendAlertAsync(alertCondition);
 
                 _logger.LogInformation("Custom alert sent: {Type} - {Message}", request.Type, request.Message);
                 return Ok(new { message = "Alert sent successfully", timestamp = DateTime.UtcNow });
@@ -296,12 +292,12 @@ namespace ESPNScrape.Controllers
             try
             {
                 // Run all monitoring checks
-                await _alertingService.CheckDataQualityAlertsAsync();
-                await _alertingService.CheckPerformanceAlertsAsync();
+                await _infrastructureService.CheckDataQualityAlertsAsync();
+                await _infrastructureService.CheckPerformanceAlertsAsync();
 
                 // Run health checks
                 var healthReport = await _healthCheckService.CheckHealthAsync();
-                await _alertingService.CheckHealthAlertsAsync(healthReport);
+                await _infrastructureService.CheckHealthAlertsAsync(healthReport);
 
                 _logger.LogInformation("Manual monitoring checks completed");
                 return Ok(new
@@ -327,17 +323,18 @@ namespace ESPNScrape.Controllers
             try
             {
                 var healthReport = await _healthCheckService.CheckHealthAsync();
-                var metrics = _metricsService.GetCurrentMetrics();
-                var activeAlerts = _alertingService.GetActiveAlerts();
-                var alertStats = await _alertingService.GetAlertStatisticsAsync();
+                var metrics = _infrastructureService.GetCurrentMetrics();
+                var activeAlerts = _infrastructureService.GetActiveAlerts();
+                // Calculate alert statistics from active alerts
+                var alertHistory = _infrastructureService.GetAlertHistory(DateTime.UtcNow.AddHours(-24));
                 var syncStatus = await GetSyncStatus();
 
                 var dashboard = new MonitoringDashboard
                 {
                     HealthStatus = healthReport.Status.ToString(),
                     ActiveAlertsCount = activeAlerts.Count,
-                    HighSeverityAlertsCount = activeAlerts.Count(a => a.Severity == AlertSeverity.High),
-                    TotalAlerts24h = alertStats.TotalAlerts24h,
+                    HighSeverityAlertsCount = activeAlerts.Count(a => a.Severity == AlertSeverity.Critical || a.Severity == AlertSeverity.Emergency),
+                    TotalAlerts24h = alertHistory.Count,
 
                     // Extract key metrics
                     ApiHealthy = healthReport.Entries.ContainsKey("espn_api") &&
@@ -348,9 +345,9 @@ namespace ESPNScrape.Controllers
                     SyncStatus = syncStatus.Value as MonitoringSyncStatus,
                     MetricsSummary = new MetricsSummary
                     {
-                        TotalApiCalls = metrics.ResponseTimeMetrics.Values.Sum(m => m.TotalRequests),
+                        TotalApiCalls = metrics.ResponseTimeMetrics.Values.Sum(m => m.RequestCount),
                         AverageApiResponseTime = metrics.ResponseTimeMetrics.Values.Any() ?
-                            TimeSpan.FromMilliseconds(metrics.ResponseTimeMetrics.Values.Average(m => m.AverageResponseTime.TotalMilliseconds)) :
+                            TimeSpan.FromMilliseconds(metrics.ResponseTimeMetrics.Values.Average(m => m.AverageResponseTime)) :
                             TimeSpan.Zero,
                         CacheHitRate = metrics.CacheMetrics.Values.Any() ?
                             metrics.CacheMetrics.Values.Average(m => m.HitRate) : 0

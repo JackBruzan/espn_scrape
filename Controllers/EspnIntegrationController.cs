@@ -20,6 +20,7 @@ public class EspnIntegrationController : ControllerBase
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IConfiguration _configuration;
     private readonly IEspnScheduleService _scheduleService;
+    private readonly ILoggerFactory _loggerFactory;
 
     public EspnIntegrationController(
         ILogger<EspnIntegrationController> logger,
@@ -27,7 +28,8 @@ public class EspnIntegrationController : ControllerBase
         IEspnPlayerMatchingService playerMatchingService,
         ISchedulerFactory schedulerFactory,
         IConfiguration configuration,
-        IEspnScheduleService scheduleService)
+        IEspnScheduleService scheduleService,
+        ILoggerFactory loggerFactory)
     {
         _logger = logger;
         _dataSyncService = dataSyncService;
@@ -35,6 +37,7 @@ public class EspnIntegrationController : ControllerBase
         _schedulerFactory = schedulerFactory;
         _configuration = configuration;
         _scheduleService = scheduleService;
+        _loggerFactory = loggerFactory;
     }
 
     /// <summary>
@@ -550,55 +553,200 @@ public class EspnIntegrationController : ControllerBase
     }
 
     /// <summary>
-    /// Test the new ESPN Core API schedule retrieval directly
+    /// Demonstrates that passing attempts and completions are properly captured from ESPN data
     /// </summary>
-    /// <param name="year">Year (defaults to current year)</param>
-    /// <param name="week">Week (defaults to 1)</param>
-    /// <param name="seasonType">Season type (defaults to 2 for regular season)</param>
-    /// <returns>Schedule data from ESPN Core API</returns>
-    [HttpGet("test/schedule-api")]
-    public async Task<ActionResult<object>> TestScheduleApi(
-        [FromQuery] int? year = null,
-        [FromQuery] int? week = null,
-        [FromQuery] int? seasonType = null)
+    /// <returns>Demonstration of passing stats processing</returns>
+    [HttpGet("demo/passing-stats")]
+    public ActionResult<object> DemonstratePassingStats()
     {
         try
         {
-            var currentYear = year ?? DateTime.Now.Year;
-            var currentWeek = week ?? 1;
-            var currentSeasonType = seasonType ?? 2;
+            _logger.LogInformation("Demonstrating passing stats capture functionality");
 
-            _logger.LogInformation("Testing ESPN Core API schedule retrieval for Year: {Year}, Week: {Week}, SeasonType: {SeasonType}",
-                currentYear, currentWeek, currentSeasonType);
+            // Create a sample ESPN PlayerStats object with typical passing statistics
+            var samplePlayerStats = new Models.Espn.PlayerStats
+            {
+                PlayerId = "4040715",
+                DisplayName = "Josh Allen",
+                ShortName = "J. Allen",
+                GameId = "401547439",
+                Season = 2024,
+                Week = 7,
+                SeasonType = 2,
+                Jersey = "17",
+                Position = new Models.Espn.PlayerPosition
+                {
+                    Abbreviation = "QB",
+                    DisplayName = "Quarterback"
+                },
+                Team = new Models.Espn.Team
+                {
+                    Abbreviation = "BUF",
+                    DisplayName = "Buffalo Bills"
+                },
+                Statistics = new List<Models.Espn.PlayerStatistic>
+                {
+                    // Passing yards (already captured)
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingYards",
+                        DisplayName = "Passing Yards",
+                        Value = 280,
+                        DisplayValue = "280",
+                        Category = "passing"
+                    },
+                    
+                    // Passing attempts (NEW - should be captured)
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingAttempts",
+                        DisplayName = "Passing Attempts",
+                        Value = 38,
+                        DisplayValue = "38",
+                        Category = "passing"
+                    },
+                    
+                    // Passing completions (NEW - should be captured)
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingCompletions",
+                        DisplayName = "Passing Completions",
+                        Value = 26,
+                        DisplayValue = "26",
+                        Category = "passing"
+                    },
+                    
+                    // Additional passing stats for completeness
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingTouchdowns",
+                        DisplayName = "Passing TDs",
+                        Value = 2,
+                        DisplayValue = "2",
+                        Category = "passing"
+                    },
 
-            var schedules = await _scheduleService.GetWeeklyScheduleFromApiAsync(currentYear, currentWeek, currentSeasonType);
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingInterceptions",
+                        DisplayName = "Interceptions",
+                        Value = 1,
+                        DisplayValue = "1",
+                        Category = "passing"
+                    },
+
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "passingRating",
+                        DisplayName = "Passer Rating",
+                        Value = 91.2m,
+                        DisplayValue = "91.2",
+                        Category = "passing"
+                    },
+                    
+                    // Alternative stat names that ESPN sometimes uses
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "attempts",
+                        DisplayName = "ATT",
+                        Value = 38,
+                        DisplayValue = "38"
+                    },
+
+                    new Models.Espn.PlayerStatistic
+                    {
+                        Name = "completions",
+                        DisplayName = "COMP",
+                        Value = 26,
+                        DisplayValue = "26"
+                    }
+                }
+            };
+
+            // Create transformation service
+            var transformationServiceLogger = _loggerFactory.CreateLogger<Services.EspnStatsTransformationService>();
+            var transformationService = new Services.EspnStatsTransformationService(transformationServiceLogger);
+
+            // Organize stats by category
+            var organizedStats = transformationService.OrganizeStatsByCategory(samplePlayerStats.Statistics);
+
+            // Verify the key stats we want are present
+            var hasPassingYards = organizedStats.Passing.ContainsKey("passingYards");
+            var hasPassingAttempts = organizedStats.Passing.ContainsKey("passingAttempts");
+            var hasPassingCompletions = organizedStats.Passing.ContainsKey("passingCompletions");
+            var hasPassingInterceptions = organizedStats.Passing.ContainsKey("passingInterceptions");
+            var hasAlternativeAttempts = organizedStats.Passing.ContainsKey("attempts");
+            var hasAlternativeCompletions = organizedStats.Passing.ContainsKey("completions");
+
+            // Calculate some metrics
+            decimal? completionPercentage = null;
+            decimal? yardsPerAttempt = null;
+            decimal? yardsPerCompletion = null;
+
+            if (hasPassingYards && hasPassingAttempts && hasPassingCompletions)
+            {
+                var yards = organizedStats.Passing["passingYards"];
+                var attempts = organizedStats.Passing["passingAttempts"];
+                var completions = organizedStats.Passing["passingCompletions"];
+
+                if (attempts > 0)
+                {
+                    completionPercentage = (completions / attempts) * 100;
+                    yardsPerAttempt = yards / attempts;
+                }
+
+                if (completions > 0)
+                {
+                    yardsPerCompletion = yards / completions;
+                }
+            }
 
             var result = new
             {
-                Success = true,
-                Year = currentYear,
-                Week = currentWeek,
-                SeasonType = currentSeasonType,
-                ScheduleCount = schedules.Count(),
-                Schedules = schedules.Take(3).Select(s => new
+                success = true,
+                demonstration = "ESPN Passing Stats Capture",
+                player = new
                 {
-                    s.GameTime,
-                    s.HomeTeamName,
-                    s.AwayTeamName,
-                    s.EspnCompetitionId,
-                    s.HomeMoneyline,
-                    s.AwayMoneyline,
-                    s.BettingProvider
-                })
+                    name = samplePlayerStats.DisplayName,
+                    position = samplePlayerStats.Position?.Abbreviation,
+                    team = samplePlayerStats.Team?.DisplayName,
+                    game = samplePlayerStats.GameId,
+                    week = samplePlayerStats.Week,
+                    season = samplePlayerStats.Season
+                },
+                verification = new
+                {
+                    passingYardsCaptured = hasPassingYards,
+                    passingAttemptsCaptured = hasPassingAttempts,
+                    passingCompletionsCaptured = hasPassingCompletions,
+                    passingInterceptionsCaptured = hasPassingInterceptions,
+                    alternativeStatNamesCaptured = hasAlternativeAttempts && hasAlternativeCompletions,
+                    allRequiredStatsCaptured = hasPassingYards && hasPassingAttempts && hasPassingCompletions && hasPassingInterceptions
+                },
+                passingStats = organizedStats.Passing,
+                calculatedMetrics = new
+                {
+                    completionPercentage = completionPercentage?.ToString("F1") + "%",
+                    yardsPerAttempt = yardsPerAttempt?.ToString("F1"),
+                    yardsPerCompletion = yardsPerCompletion?.ToString("F1")
+                },
+                databaseStorageStructure = new
+                {
+                    note = "These stats would be stored in the 'passing' JSONB column in the PlayerStats table",
+                    jsonStructure = organizedStats.Passing
+                },
+                conclusion = hasPassingYards && hasPassingAttempts && hasPassingCompletions && hasPassingInterceptions
+                    ? "✅ SUCCESS: Passing yards, attempts, completions, and interceptions are all properly captured!"
+                    : "❌ ISSUE: Some passing stats are missing from capture"
             };
 
-            _logger.LogInformation("Successfully retrieved {Count} games via ESPN Core API", schedules.Count());
+            _logger.LogInformation("Passing stats demonstration completed successfully");
             return Ok(result);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to test ESPN Core API schedule retrieval");
-            return StatusCode(500, new { success = false, message = "Failed to retrieve schedule via ESPN Core API", error = ex.Message });
+            _logger.LogError(ex, "Failed to demonstrate passing stats functionality");
+            return StatusCode(500, new { success = false, message = "Failed to demonstrate passing stats", error = ex.Message });
         }
     }
 }

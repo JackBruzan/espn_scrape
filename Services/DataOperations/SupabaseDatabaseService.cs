@@ -17,6 +17,8 @@ public interface ISupabaseDatabaseService
 
     // Player stats operations
     Task<bool> SavePlayerStatsAsync(PlayerStatsRecord playerStats, CancellationToken cancellationToken = default);
+    Task<bool> UpsertPlayerStatsAsync(PlayerStatsRecord playerStats, CancellationToken cancellationToken = default);
+    Task<int> UpsertPlayerStatsBatchAsync(List<PlayerStatsRecord> playerStatsList, CancellationToken cancellationToken = default);
     Task<List<PlayerStatsRecord>> GetPlayerStatsAsync(long playerId, int? season = null, int? week = null, CancellationToken cancellationToken = default);
 
     // Sync operations
@@ -65,8 +67,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
     {
         try
         {
-            _logger.LogDebug("Searching for player with ESPN ID: {EspnId}", espnId);
-
             var response = await _supabaseClient
                 .From<PlayerRecord>()
                 .Where(p => p.espn_player_id == espnId)
@@ -74,11 +74,9 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
 
             if (response != null)
             {
-                _logger.LogDebug("Found player with ID {PlayerId} for ESPN ID {EspnId}", response.id, espnId);
                 return response.id;
             }
 
-            _logger.LogDebug("No player found for ESPN ID: {EspnId}", espnId);
             return null;
         }
         catch (Exception ex)
@@ -92,8 +90,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
     {
         try
         {
-            _logger.LogDebug("Searching for matching player: {FirstName} {LastName}", espnPlayer.FirstName, espnPlayer.LastName);
-
             // First try exact name match
             var exactMatch = await _supabaseClient
                 .From<PlayerRecord>()
@@ -103,7 +99,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
             if (exactMatch != null)
             {
                 var fullName = $"{exactMatch.first_name} {exactMatch.last_name}";
-                _logger.LogDebug("Found exact match: Player ID {PlayerId} - {Name}", exactMatch.id, fullName);
                 return (exactMatch.id, fullName);
             }
 
@@ -122,12 +117,13 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
                 if (fuzzyMatch != null)
                 {
                     var fullName = $"{fuzzyMatch.first_name} {fuzzyMatch.last_name}";
-                    _logger.LogDebug("Found fuzzy match: Player ID {PlayerId} - {Name}", fuzzyMatch.id, fullName);
                     return (fuzzyMatch.id, fullName);
                 }
             }
 
-            _logger.LogDebug("No matching player found for {FirstName} {LastName}", espnPlayer.FirstName, espnPlayer.LastName);
+            _logger.LogWarning("No matching player found for ESPN player {FirstName} {LastName} (ESPN ID: {EspnId}). " +
+                "Checked {PlayerCount} active players in database for both exact and fuzzy matches.",
+                espnPlayer.FirstName, espnPlayer.LastName, espnPlayer.Id, players?.Models?.Count ?? 0);
             return (null, null);
         }
         catch (Exception ex)
@@ -144,63 +140,29 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
             _logger.LogDebug("Adding new player: {FirstName} {LastName} (ESPN ID: {EspnId})",
                 espnPlayer.FirstName, espnPlayer.LastName, espnPlayer.Id);
 
-            // Get team and position IDs
-            _logger.LogInformation("Player {PlayerName} team info: Team={Team}, Abbreviation={TeamAbbr}",
-                espnPlayer.DisplayName, espnPlayer.Team?.DisplayName ?? "NULL", espnPlayer.Team?.Abbreviation ?? "NULL");
-
-            long? teamId = null;
-            if (espnPlayer.Team != null && !string.IsNullOrEmpty(espnPlayer.Team.Abbreviation))
+            // Double-check if player exists before inserting (prevents race condition)
+            var existingPlayerId = await FindPlayerByEspnIdAsync(espnPlayer.Id, cancellationToken);
+            if (existingPlayerId.HasValue)
             {
-                // Map ESPN team abbreviations to database abbreviations
-                var dbTeamAbbr = MapEspnTeamAbbreviation(espnPlayer.Team.Abbreviation);
-
-                _logger.LogInformation("Looking up team ID for abbreviation: '{TeamAbbr}' (mapped from ESPN '{EspnAbbr}') for player {PlayerName}",
-                    dbTeamAbbr, espnPlayer.Team.Abbreviation, espnPlayer.DisplayName);
-                teamId = await FindTeamIdByAbbreviationAsync(dbTeamAbbr, cancellationToken);
-                _logger.LogInformation("Team lookup result for '{TeamAbbr}': {TeamId}",
-                    dbTeamAbbr, teamId?.ToString() ?? "NULL");
-            }
-            else
-            {
-                _logger.LogInformation("Player {PlayerName} has no team data - Team is null or abbreviation is empty",
-                    espnPlayer.DisplayName);
+                _logger.LogInformation("Player {FirstName} {LastName} (ESPN ID: {EspnId}) already exists with ID {PlayerId}",
+                    espnPlayer.FirstName, espnPlayer.LastName, espnPlayer.Id, existingPlayerId.Value);
+                return true; // Player already exists, consider it a success
             }
 
-            // If no team found or player has no team, default to Free Agent (FA)
-            if (teamId == null)
-            {
-                try
-                {
-                    teamId = await FindTeamIdByAbbreviationAsync("FA", cancellationToken);
-                    _logger.LogDebug("Player {PlayerName} assigned to Free Agent team (ID: {TeamId})",
-                        espnPlayer.DisplayName, teamId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to lookup FA team, using hardcoded ID 33");
-                    teamId = 33; // Hardcoded FA team ID as fallback
-                }
-
-                // Final safety check - if FA lookup also failed, use hardcoded ID
-                if (teamId == null)
-                {
-                    _logger.LogWarning("FA team lookup returned null, using hardcoded ID 33 for player {PlayerName}",
-                        espnPlayer.DisplayName);
-                    teamId = 33; // Free Agent team ID
-                }
-            }
+            // Skip team assignments - teams will be managed elsewhere
+            _logger.LogDebug("Skipping team assignment for new player {PlayerName} - teams managed externally", espnPlayer.DisplayName);
 
             var positionId = espnPlayer.Position != null ? await FindPositionIdByNameAsync(espnPlayer.Position.Abbreviation, cancellationToken) : null;
 
-            _logger.LogDebug("Looked up IDs for {PlayerName}: TeamId={TeamId}, PositionId={PositionId}",
-                espnPlayer.DisplayName, teamId?.ToString() ?? "NULL", positionId?.ToString() ?? "NULL");
+            _logger.LogDebug("Looked up IDs for {PlayerName}: PositionId={PositionId} (TeamId skipped - managed externally)",
+                espnPlayer.DisplayName, positionId?.ToString() ?? "NULL");
 
             var playerRecord = new PlayerRecord
             {
                 first_name = espnPlayer.FirstName,
                 last_name = espnPlayer.LastName,
                 espn_player_id = espnPlayer.Id,
-                team_id = teamId,
+                // team_id excluded - teams managed externally
                 position_id = positionId,
                 active = espnPlayer.Active,
                 created_at = DateTime.UtcNow,
@@ -224,7 +186,16 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error adding player {FirstName} {LastName}", espnPlayer.FirstName, espnPlayer.LastName);
+            // Check if this is a unique constraint violation (duplicate ESPN ID)
+            if (ex.Message.Contains("23505") || ex.Message.Contains("duplicate key") || ex.Message.Contains("already exists"))
+            {
+                _logger.LogWarning("Player {FirstName} {LastName} (ESPN ID: {EspnId}) already exists (unique constraint violation). This is expected during concurrent operations.",
+                    espnPlayer.FirstName, espnPlayer.LastName, espnPlayer.Id);
+                return true; // Treat as success - player exists
+            }
+
+            _logger.LogError(ex, "Error adding player {FirstName} {LastName} (ESPN ID: {EspnId})",
+                espnPlayer.FirstName, espnPlayer.LastName, espnPlayer.Id);
             return false;
         }
     }
@@ -235,38 +206,8 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
         {
             _logger.LogDebug("Updating player {PlayerId} with ESPN data", playerId);
 
-            // Get team and position IDs - same logic as AddPlayerAsync
-            long? teamId = null;
-            if (espnPlayer.Team != null && !string.IsNullOrEmpty(espnPlayer.Team.Abbreviation))
-            {
-                // Map ESPN team abbreviations to database abbreviations
-                var dbTeamAbbr = MapEspnTeamAbbreviation(espnPlayer.Team.Abbreviation);
-                teamId = await FindTeamIdByAbbreviationAsync(dbTeamAbbr, cancellationToken);
-            }
-
-            // If no team found or player has no team, default to Free Agent (FA)
-            if (teamId == null)
-            {
-                try
-                {
-                    teamId = await FindTeamIdByAbbreviationAsync("FA", cancellationToken);
-                    _logger.LogDebug("Player {PlayerName} (ID: {PlayerId}) assigned to Free Agent team (ID: {TeamId})",
-                        espnPlayer.DisplayName, playerId, teamId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to lookup FA team for player update, using hardcoded ID 33");
-                    teamId = 33; // Hardcoded FA team ID as fallback
-                }
-
-                // Final safety check - if FA lookup also failed, use hardcoded ID
-                if (teamId == null)
-                {
-                    _logger.LogWarning("FA team lookup returned null for player update, using hardcoded ID 33 for player {PlayerName} (ID: {PlayerId})",
-                        espnPlayer.DisplayName, playerId);
-                    teamId = 33; // Free Agent team ID
-                }
-            }
+            // Skip team updates - teams will be managed elsewhere
+            _logger.LogDebug("Skipping team update for player {PlayerName} - teams managed externally", espnPlayer.DisplayName);
 
             var positionId = espnPlayer.Position != null ? await FindPositionIdByNameAsync(espnPlayer.Position.Abbreviation, cancellationToken) : null;
 
@@ -276,7 +217,7 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
                 first_name = espnPlayer.FirstName,
                 last_name = espnPlayer.LastName,
                 espn_player_id = espnPlayer.Id,
-                team_id = teamId,
+                // team_id excluded - teams managed externally
                 position_id = positionId,
                 active = espnPlayer.Active,
                 updated_at = DateTime.UtcNow
@@ -308,8 +249,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
     {
         try
         {
-            _logger.LogDebug("Finding team ID for abbreviation: {Abbreviation}", abbreviation);
-
             var team = await _supabaseClient
                 .From<TeamRecord>()
                 .Where(t => t.abbreviation == abbreviation)
@@ -317,7 +256,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
 
             if (team != null)
             {
-                _logger.LogDebug("Found team ID {TeamId} for abbreviation {Abbreviation}", team.id, abbreviation);
                 return team.id;
             }
 
@@ -335,8 +273,6 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
     {
         try
         {
-            _logger.LogDebug("Finding position ID for name: {PositionName}", positionName);
-
             var position = await _supabaseClient
                 .From<PositionRecord>()
                 .Where(p => p.name == positionName)
@@ -344,11 +280,9 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
 
             if (position != null)
             {
-                _logger.LogDebug("Found position ID {PositionId} for name {PositionName}", position.id, positionName);
                 return position.id;
             }
 
-            _logger.LogDebug("No position found for name: {PositionName}", positionName);
             return null;
         }
         catch (Exception ex)
@@ -363,16 +297,16 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
         if (string.IsNullOrWhiteSpace(dbName) || string.IsNullOrWhiteSpace(espnName))
             return false;
 
-        // Case-insensitive exact match
-        if (string.Equals(dbName.Trim(), espnName.Trim(), StringComparison.OrdinalIgnoreCase))
+        // Normalize names for better comparison (handles C.J. -> CJ, etc.)
+        var normalizedDbName = StringMatchingAlgorithms.NormalizeName(dbName.Trim());
+        var normalizedEspnName = StringMatchingAlgorithms.NormalizeName(espnName.Trim());
+
+        // Exact match after normalization
+        if (string.Equals(normalizedDbName, normalizedEspnName, StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // Handle common nickname patterns
-        var dbNameLower = dbName.Trim().ToLowerInvariant();
-        var espnNameLower = espnName.Trim().ToLowerInvariant();
-
         // Check if one name contains the other (for nicknames)
-        return dbNameLower.Contains(espnNameLower) || espnNameLower.Contains(dbNameLower);
+        return normalizedDbName.Contains(normalizedEspnName) || normalizedEspnName.Contains(normalizedDbName);
     }
 
     // Sync Operations Implementation
@@ -664,52 +598,77 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
     {
         try
         {
-            _logger.LogDebug("Saving player stats for player code {PlayerCode}, game date {GameDate}",
-                playerStats.PlayerCode, playerStats.GameDate);
+            _logger.LogDebug("Saving player stats for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                playerStats.EspnPlayerId, playerStats.EspnGameId);
 
-            // Set timestamps
-            var now = DateTime.UtcNow;
-            playerStats.CreatedAt = now;
-            playerStats.UpdatedAt = now;
+            // Validate required fields for duplicate checking
+            if (string.IsNullOrEmpty(playerStats.EspnPlayerId) || string.IsNullOrEmpty(playerStats.EspnGameId))
+            {
+                _logger.LogWarning("Cannot save player stats - missing required fields: EspnPlayerId={EspnPlayerId}, EspnGameId={EspnGameId}",
+                    playerStats.EspnPlayerId, playerStats.EspnGameId);
+                return false;
+            }
 
-            // Check if stats already exist for this player and game (using composite key)
+            // Check if stats already exist for this player and game using the logical key (ESPN IDs)
             var existingStats = await _supabaseClient
                 .From<PlayerStatsRecord>()
-                .Select("id")
-                .Filter("player_code", Supabase.Postgrest.Constants.Operator.Equals, playerStats.PlayerCode)
-                .Filter("game_date", Supabase.Postgrest.Constants.Operator.Equals, playerStats.GameDate.ToString("O"))
+                .Select("*") // Select all fields to compare data changes
+                .Filter("espn_player_id", Supabase.Postgrest.Constants.Operator.Equals, playerStats.EspnPlayerId)
+                .Filter("espn_game_id", Supabase.Postgrest.Constants.Operator.Equals, playerStats.EspnGameId)
                 .Get(cancellationToken);
+
+            var now = DateTime.UtcNow;
 
             if (existingStats?.Models?.Any() == true)
             {
-                // Update existing record using composite key
-                playerStats.CreatedAt = existingStats.Models.First().CreatedAt; // Keep original creation time
+                var existingRecord = existingStats.Models.First();
 
-                var updateResult = await _supabaseClient
-                    .From<PlayerStatsRecord>()
-                    .Where(ps => ps.PlayerCode == playerStats.PlayerCode && ps.GameDate == playerStats.GameDate)
-                    .Update(playerStats);
+                // Compare the data to see if anything has changed
+                if (HasStatsDataChanged(existingRecord, playerStats))
+                {
+                    _logger.LogDebug("Stats data has changed for ESPN Player {EspnPlayerId}, Game {EspnGameId} - updating record",
+                        playerStats.EspnPlayerId, playerStats.EspnGameId);
 
-                _logger.LogDebug("Updated existing player stats record for player {PlayerCode} on {GameDate}",
-                    playerStats.PlayerCode, playerStats.GameDate);
-                return updateResult?.Models?.Any() == true;
+                    // Update existing record - preserve original creation time and set new updated time
+                    playerStats.Id = existingRecord.Id; // Ensure we update the correct record
+                    playerStats.CreatedAt = existingRecord.CreatedAt; // Keep original creation time
+                    playerStats.UpdatedAt = now;
+
+                    var updateResult = await _supabaseClient
+                        .From<PlayerStatsRecord>()
+                        .Where(ps => ps.EspnPlayerId == playerStats.EspnPlayerId && ps.EspnGameId == playerStats.EspnGameId)
+                        .Update(playerStats);
+
+                    _logger.LogDebug("Updated existing player stats record for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                        playerStats.EspnPlayerId, playerStats.EspnGameId);
+                    return updateResult?.Models?.Any() == true;
+                }
+                else
+                {
+                    _logger.LogDebug("No changes detected for ESPN Player {EspnPlayerId}, Game {EspnGameId} - skipping update",
+                        playerStats.EspnPlayerId, playerStats.EspnGameId);
+                    return true; // Return success since the data is already correct
+                }
             }
             else
             {
                 // Insert new record
+                playerStats.CreatedAt = now;
+                playerStats.UpdatedAt = now;
+
                 var insertResult = await _supabaseClient
                     .From<PlayerStatsRecord>()
                     .Insert(playerStats);
 
-                _logger.LogDebug("Inserted new player stats record for player {PlayerCode} on {GameDate}",
-                    playerStats.PlayerCode, playerStats.GameDate);
+                _logger.LogDebug("Inserted new player stats record for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                    playerStats.EspnPlayerId, playerStats.EspnGameId);
                 return insertResult?.Models?.Any() == true;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save player stats for player code {PlayerCode}, game date {GameDate}. Team: {Team}, Error: {ErrorMessage}",
-                playerStats.PlayerCode, playerStats.GameDate, playerStats.Team, ex.Message);
+            _logger.LogError(ex, "Failed to save player stats for ESPN Player {EspnPlayerId}, Game {EspnGameId}. Team: {Team}, Error: {ErrorMessage}",
+                playerStats.EspnPlayerId, playerStats.EspnGameId, playerStats.Team, ex.Message);
             return false;
         }
     }
@@ -879,6 +838,223 @@ public class SupabaseDatabaseService : ISupabaseDatabaseService
             _logger.LogError(ex, "Failed to save schedule for game {EspnGameId}. Error: {ErrorMessage}",
                 schedule.espn_game_id, ex.Message);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Upserts player stats using native Supabase upsert functionality
+    /// This method is more efficient than the SavePlayerStatsAsync method for bulk operations
+    /// </summary>
+    /// <param name="playerStats">The player stats record to upsert</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>True if the operation was successful, false otherwise</returns>
+    public async Task<bool> UpsertPlayerStatsAsync(PlayerStatsRecord playerStats, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            _logger.LogDebug("Upserting player stats for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                playerStats.EspnPlayerId, playerStats.EspnGameId);
+
+            // Validate required fields
+            if (string.IsNullOrEmpty(playerStats.EspnPlayerId) || string.IsNullOrEmpty(playerStats.EspnGameId))
+            {
+                _logger.LogWarning("Cannot upsert player stats - missing required fields: EspnPlayerId={EspnPlayerId}, EspnGameId={EspnGameId}",
+                    playerStats.EspnPlayerId, playerStats.EspnGameId);
+                return false;
+            }
+
+            var now = DateTime.UtcNow;
+            playerStats.UpdatedAt = now;
+
+            // If CreatedAt is not set, set it to now (for new records)
+            if (playerStats.CreatedAt == default(DateTime))
+            {
+                playerStats.CreatedAt = now;
+            }
+
+            // Use Supabase's upsert functionality with the unique constraint columns
+            // This will INSERT if the record doesn't exist, or UPDATE if it does
+            var result = await _supabaseClient
+                .From<PlayerStatsRecord>()
+                .Upsert(playerStats);
+
+            _logger.LogDebug("Successfully upserted player stats for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                playerStats.EspnPlayerId, playerStats.EspnGameId);
+
+            return result?.Models?.Any() == true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Upsert failed for ESPN Player {EspnPlayerId}, Game {EspnGameId}, falling back to SavePlayerStatsAsync",
+                playerStats.EspnPlayerId, playerStats.EspnGameId);
+
+            // Fallback to our more robust SavePlayerStatsAsync method
+            try
+            {
+                return await SavePlayerStatsAsync(playerStats, cancellationToken);
+            }
+            catch (Exception fallbackEx)
+            {
+                _logger.LogError(fallbackEx, "Fallback save also failed for ESPN Player {EspnPlayerId}, Game {EspnGameId}. Team: {Team}",
+                    playerStats.EspnPlayerId, playerStats.EspnGameId, playerStats.Team);
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Upserts multiple player stats records in a single batch operation
+    /// This method is more efficient for bulk operations than individual upserts
+    /// </summary>
+    /// <param name="playerStatsList">List of player stats records to upsert</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Number of records successfully upserted</returns>
+    public async Task<int> UpsertPlayerStatsBatchAsync(List<PlayerStatsRecord> playerStatsList, CancellationToken cancellationToken = default)
+    {
+        if (playerStatsList?.Any() != true)
+        {
+            _logger.LogWarning("UpsertPlayerStatsBatchAsync called with empty or null list");
+            return 0;
+        }
+
+        try
+        {
+            _logger.LogInformation("Batch upserting {Count} player stats records", playerStatsList.Count);
+
+            var now = DateTime.UtcNow;
+
+            // Prepare all records for upsert
+            foreach (var playerStats in playerStatsList)
+            {
+                // Validate required fields
+                if (string.IsNullOrEmpty(playerStats.EspnPlayerId) || string.IsNullOrEmpty(playerStats.EspnGameId))
+                {
+                    _logger.LogWarning("Skipping player stats record with missing required fields: EspnPlayerId={EspnPlayerId}, EspnGameId={EspnGameId}",
+                        playerStats.EspnPlayerId, playerStats.EspnGameId);
+                    continue;
+                }
+
+                playerStats.UpdatedAt = now;
+
+                // If CreatedAt is not set, set it to now (for new records)
+                if (playerStats.CreatedAt == default(DateTime))
+                {
+                    playerStats.CreatedAt = now;
+                }
+            }
+
+            // Filter out invalid records
+            var validRecords = playerStatsList
+                .Where(ps => !string.IsNullOrEmpty(ps.EspnPlayerId) && !string.IsNullOrEmpty(ps.EspnGameId))
+                .ToList();
+
+            if (!validRecords.Any())
+            {
+                _logger.LogWarning("No valid records to upsert after filtering");
+                return 0;
+            }
+
+            // Use individual upserts for better error handling since batch upsert 
+            // fails completely when there are conflicts with unique constraints
+            var successCount = 0;
+            foreach (var record in validRecords)
+            {
+                try
+                {
+                    var individualResult = await _supabaseClient
+                        .From<PlayerStatsRecord>()
+                        .Upsert(record);
+
+                    if (individualResult?.Models?.Any() == true)
+                    {
+                        successCount++;
+                    }
+                }
+                catch (Exception)
+                {
+                    // If individual upsert fails, try using our SavePlayerStatsAsync method
+                    // which handles conflicts more gracefully
+                    try
+                    {
+                        var saved = await SavePlayerStatsAsync(record, cancellationToken);
+                        if (saved)
+                        {
+                            successCount++;
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Failed to save player stats for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                                record.EspnPlayerId, record.EspnGameId);
+                        }
+                    }
+                    catch (Exception fallbackEx)
+                    {
+                        _logger.LogWarning(fallbackEx, "Failed fallback save for ESPN Player {EspnPlayerId}, Game {EspnGameId}",
+                            record.EspnPlayerId, record.EspnGameId);
+                    }
+                }
+            }
+
+            _logger.LogInformation("Successfully processed {SuccessCount}/{TotalCount} player stats records",
+                successCount, validRecords.Count);
+
+            return successCount;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to batch upsert {Count} player stats records. Error: {ErrorMessage}",
+                playerStatsList?.Count ?? 0, ex.Message);
+            return 0;
+        }
+    }
+
+
+
+    /// <summary>
+    /// Compares two PlayerStatsRecord objects to determine if the statistical data has changed
+    /// </summary>
+    /// <param name="existing">The existing record from the database</param>
+    /// <param name="incoming">The new record to compare</param>
+    /// <returns>True if the data has changed, false otherwise</returns>
+    private bool HasStatsDataChanged(PlayerStatsRecord existing, PlayerStatsRecord incoming)
+    {
+        try
+        {
+            // Compare basic player information
+            if (existing.Name != incoming.Name ||
+                existing.Team != incoming.Team ||
+                existing.GameLocation != incoming.GameLocation ||
+                existing.Season != incoming.Season ||
+                existing.Week != incoming.Week)
+            {
+                return true;
+            }
+
+            // Compare statistical data (JSONB fields)
+            // Convert to JSON strings for comparison since these are complex objects
+            var existingPassingJson = System.Text.Json.JsonSerializer.Serialize(existing.Passing);
+            var incomingPassingJson = System.Text.Json.JsonSerializer.Serialize(incoming.Passing);
+
+            var existingRushingJson = System.Text.Json.JsonSerializer.Serialize(existing.Rushing);
+            var incomingRushingJson = System.Text.Json.JsonSerializer.Serialize(incoming.Rushing);
+
+            var existingReceivingJson = System.Text.Json.JsonSerializer.Serialize(existing.Receiving);
+            var incomingReceivingJson = System.Text.Json.JsonSerializer.Serialize(incoming.Receiving);
+
+            if (existingPassingJson != incomingPassingJson ||
+                existingRushingJson != incomingRushingJson ||
+                existingReceivingJson != incomingReceivingJson)
+            {
+                return true;
+            }
+
+            return false; // No changes detected
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error comparing player stats data for ESPN Player {EspnPlayerId}, Game {EspnGameId}. Assuming data has changed.",
+                existing.EspnPlayerId, existing.EspnGameId);
+            return true; // If we can't compare, assume it changed to be safe
         }
     }
 

@@ -274,7 +274,7 @@ public class EspnStatsSyncJob : IJob
 
         options.ForceFullSync = config.GetValue("ForceFullSync", false);
         options.SkipInactives = config.GetValue("SkipInactives", true);
-        options.BatchSize = config.GetValue("BatchSize", 50); // Smaller batches for stats
+        options.BatchSize = config.GetValue("BatchSize", 200); // Increased batch size for faster processing
         options.DryRun = config.GetValue("DryRun", false);
         options.MaxRetries = config.GetValue("MaxRetries", 3);
         options.RetryDelayMs = config.GetValue("RetryDelayMs", 2000); // Longer delay for stats

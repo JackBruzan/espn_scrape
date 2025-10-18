@@ -55,3 +55,4 @@ nunit-*.xml
 
 # Downloaded content
 downloads/
+data/*

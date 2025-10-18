@@ -109,6 +109,20 @@ namespace ESPNScrape.Models.Supabase
         public object? Receiving { get; set; }
 
         /// <summary>
+        /// Total number of fumbles by the player in this game
+        /// </summary>
+        [Column("fumbles")]
+        [JsonPropertyName("fumbles")]
+        public int? Fumbles { get; set; }
+
+        /// <summary>
+        /// Number of fumbles lost by the player in this game
+        /// </summary>
+        [Column("fumbles_lost")]
+        [JsonPropertyName("fumbles_lost")]
+        public int? FumblesLost { get; set; }
+
+        /// <summary>
         /// When this record was created
         /// </summary>
         [Column("created_at")]

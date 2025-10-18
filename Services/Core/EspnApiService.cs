@@ -1,17 +1,30 @@
 using ESPNScrape.Models.Espn;
 using ESPNScrape.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace ESPNScrape.Services
+namespace ESPNScrape.Services.Core
 {
-    public class EspnApiService : IEspnApiService
+    /// <summary>
+    /// Comprehensive ESPN API service combining high-level orchestration and Core API access
+    /// </summary>
+    public class EspnApiService : IEspnApiService, IEspnCoreApiService
     {
         private readonly IEspnScoreboardService _scoreboardService;
         private readonly IEspnBoxScoreService _boxScoreService;
         private readonly IEspnCacheService _cacheService;
         private readonly IEspnHttpService _httpService;
         private readonly ILogger<EspnApiService> _logger;
+
+        // ESPN Core API base URL
+        private const string ApiBaseUrl = "https://sports.core.api.espn.com/v2";
+
+        // ESPN Core API endpoint templates
+        private const string ScheduleUrlTemplate = "{0}/sports/football/leagues/nfl/seasons/{1}/types/{2}/weeks/{3}/events";
+        private const string OddsUrlTemplate = "{0}/sports/football/leagues/nfl/events/{1}/competitions/{2}/odds";
+
+        private readonly JsonSerializerOptions _jsonOptions;
 
         public EspnApiService(
             IEspnScoreboardService scoreboardService,
@@ -25,7 +38,15 @@ namespace ESPNScrape.Services
             _cacheService = cacheService;
             _httpService = httpService;
             _logger = logger;
+
+            _jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            };
         }
+
+        #region High-Level API Methods (IEspnApiService)
 
         public async Task<Season> GetSeasonAsync(int year, CancellationToken cancellationToken = default)
         {
@@ -340,100 +361,166 @@ namespace ESPNScrape.Services
             }, cancellationToken: cancellationToken);
         }
 
-        #region Private Helper Methods
+        #endregion
 
-        private static int GetMaxWeeksForSeasonType(int seasonType)
-        {
-            return seasonType switch
-            {
-                1 => 4,  // Preseason
-                2 => 18, // Regular season
-                3 => 5,  // Postseason
-                _ => 18  // Default to regular season
-            };
-        }
+        #region Core API Methods (IEspnCoreApiService)
 
-        private static int GetNflSeasonYear(DateTime date)
-        {
-            // NFL season typically starts in September and ends in February of the following year
-            // If it's January-July, it's still considered the previous season
-            return date.Month <= 7 ? date.Year - 1 : date.Year;
-        }
-
-        private static (int seasonType, int weekNumber) CalculateCurrentWeek(DateTime currentDate, int nflYear)
-        {
-            // For September 19, 2025, we're clearly in regular season
-            // This is a simplified calculation - in a real implementation, 
-            // you'd want to use actual NFL schedule data
-
-            // September 19th, 2025 should be around Week 3 of regular season
-            if (currentDate.Month == 9 && currentDate.Day >= 1)
-            {
-                // Regular season - Week 3 is reasonable for mid-September
-                return (2, 3);
-            }
-
-            var seasonStart = new DateTime(nflYear, 9, 1); // Approximate season start
-
-            if (currentDate < seasonStart)
-            {
-                // Preseason
-                var preseasonStart = new DateTime(nflYear, 8, 1);
-                var weeksSincePreseason = (int)((currentDate - preseasonStart).Days / 7) + 1;
-                return (1, Math.Max(1, Math.Min(4, weeksSincePreseason)));
-            }
-
-            var regularSeasonStart = new DateTime(nflYear, 9, 7); // Approximate
-            if (currentDate < regularSeasonStart.AddDays(18 * 7))
-            {
-                // Regular season
-                var weeksSinceRegular = (int)((currentDate - regularSeasonStart).Days / 7) + 1;
-                return (2, Math.Max(1, Math.Min(18, weeksSinceRegular)));
-            }
-
-            // Postseason
-            var postseasonStart = regularSeasonStart.AddDays(18 * 7);
-            var weeksSincePostseason = (int)((currentDate - postseasonStart).Days / 7) + 1;
-            return (3, Math.Max(1, Math.Min(5, weeksSincePostseason)));
-        }
-
-        private static (int seasonType, int weekNumber) CalculateWeekFromDate(DateTime date, int nflYear)
-        {
-            return CalculateCurrentWeek(date, nflYear);
-        }
-
-        private static IEnumerable<PlayerStats> ExtractPlayerStatsFromBoxScore(BoxScore boxScore)
+        public async Task<EspnScheduleResponse?> GetWeeklyScheduleAsync(int year, int week, int seasonType = 2, CancellationToken cancellationToken = default)
         {
             try
             {
-                if (boxScore?.Players == null || !boxScore.Players.Any())
+                _logger.LogDebug("Fetching ESPN Core API schedule for Year: {Year}, Week: {Week}, SeasonType: {SeasonType}", year, week, seasonType);
+
+                ValidateParameters(year, week, seasonType);
+
+                var url = string.Format(ScheduleUrlTemplate, ApiBaseUrl, year, seasonType, week);
+
+                _logger.LogDebug("ESPN Core API URL: {Url}", url);
+
+                var jsonResponse = await _httpService.GetRawJsonAsync(url, cancellationToken);
+
+                if (string.IsNullOrEmpty(jsonResponse))
                 {
-                    return Enumerable.Empty<PlayerStats>();
+                    _logger.LogWarning("Empty response from ESPN Core API for {Url}", url);
+                    return null;
                 }
 
-                // The BoxScore already contains parsed PlayerStats, so we can return them directly
-                // Filter out any null or invalid entries and ensure game context
-                var validPlayerStats = boxScore.Players
-                    .Where(ps => ps != null && !string.IsNullOrEmpty(ps.PlayerId))
-                    .Select(ps =>
+                // Log response size instead of full content to reduce log verbosity
+                _logger.LogDebug("Received ESPN API Response: {Length} characters", jsonResponse.Length);
+
+                var scheduleResponse = JsonSerializer.Deserialize<EspnScheduleResponse>(jsonResponse, _jsonOptions);
+
+                if (scheduleResponse?.Items == null || scheduleResponse.Items.Count == 0)
+                {
+                    _logger.LogWarning("No events found in ESPN Core API response for Week {Week}, {Year}", week, year);
+                    return null;
+                }
+
+                _logger.LogInformation("Successfully fetched {Count} event references from ESPN Core API for Week {Week}, {Year}",
+                    scheduleResponse.Items.Count, week, year);
+
+                // Now we need to fetch the actual event details from each reference
+                var events = new List<EspnEvent>();
+
+                foreach (var eventRef in scheduleResponse.Items.Take(5)) // Limit to first 5 for testing
+                {
+                    try
                     {
-                        // Ensure the player stats have game context information
-                        if (string.IsNullOrEmpty(ps.GameId))
+                        _logger.LogDebug("Fetching event details from: {Url}", eventRef.Ref);
+                        var eventJson = await _httpService.GetRawJsonAsync(eventRef.Ref, cancellationToken);
+
+                        if (!string.IsNullOrEmpty(eventJson))
                         {
-                            ps.GameId = boxScore.GameId;
+                            var eventDetail = JsonSerializer.Deserialize<EspnEvent>(eventJson, _jsonOptions);
+                            if (eventDetail != null)
+                            {
+                                events.Add(eventDetail);
+                            }
                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to fetch event details from {Url}", eventRef.Ref);
+                    }
+                }
 
-                        return ps;
-                    })
-                    .ToList();
+                _logger.LogInformation("Successfully fetched {Count} full event details from ESPN Core API", events.Count);
 
-                return validPlayerStats;
+                // For now, return the original response - we'll need to modify the service interface to handle events
+                return scheduleResponse;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Return empty collection to allow processing to continue
-                return Enumerable.Empty<PlayerStats>();
+                _logger.LogError(ex, "Error fetching schedule from ESPN Core API for Year: {Year}, Week: {Week}, SeasonType: {SeasonType}",
+                    year, week, seasonType);
+                throw;
             }
+        }
+
+        public async Task<EspnOdds?> GetEventOddsAsync(string gameId, string competitionId, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                _logger.LogDebug("Fetching ESPN Core API odds for GameId: {GameId}, CompetitionId: {CompetitionId}", gameId, competitionId);
+
+                if (string.IsNullOrEmpty(gameId) || string.IsNullOrEmpty(competitionId))
+                {
+                    _logger.LogWarning("Invalid parameters for odds request: GameId={GameId}, CompetitionId={CompetitionId}", gameId, competitionId);
+                    return null;
+                }
+
+                var url = string.Format(OddsUrlTemplate, ApiBaseUrl, gameId, competitionId);
+
+                _logger.LogDebug("ESPN Odds API URL: {Url}", url);
+
+                var jsonResponse = await _httpService.GetRawJsonAsync(url, cancellationToken);
+
+                if (string.IsNullOrEmpty(jsonResponse))
+                {
+                    _logger.LogDebug("No odds data available for GameId: {GameId}", gameId);
+                    return null;
+                }
+
+                _logger.LogDebug("Received ESPN Odds API Response for GameId {GameId}: {Length} characters", gameId, jsonResponse.Length);
+
+                var oddsCollectionResponse = JsonSerializer.Deserialize<EspnOddsResponse>(jsonResponse, _jsonOptions);
+
+                if (oddsCollectionResponse == null || !oddsCollectionResponse.Items.Any())
+                {
+                    _logger.LogWarning("Failed to deserialize odds response or no odds available for GameId: {GameId}", gameId);
+                    return null;
+                }
+
+                // Return the first odds item (typically ESPN BET has priority)
+                var oddsResponse = oddsCollectionResponse.Items.First();
+
+                _logger.LogDebug("Successfully fetched odds from ESPN Core API for GameId: {GameId} - OverUnder: {OverUnder}",
+                    gameId, oddsResponse.OverUnder);
+
+                return oddsResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching odds from ESPN Core API for GameId: {GameId}, CompetitionId: {CompetitionId}",
+                    gameId, competitionId);
+                // Don't throw for odds errors - continue with schedule data
+                return null;
+            }
+        }
+
+        public async Task<List<EspnOdds>> GetBulkEventOddsAsync(IEnumerable<(string gameId, string competitionId)> gameCompetitionPairs, CancellationToken cancellationToken = default)
+        {
+            var odds = new List<EspnOdds>();
+
+            var pairs = gameCompetitionPairs.ToList();
+            _logger.LogInformation("Fetching odds for {Count} events from ESPN Core API", pairs.Count);
+
+            var semaphore = new SemaphoreSlim(5, 5); // Limit concurrent requests to avoid rate limiting
+            var tasks = pairs.Select(async pair =>
+            {
+                await semaphore.WaitAsync(cancellationToken);
+                try
+                {
+                    var result = await GetEventOddsAsync(pair.gameId, pair.competitionId, cancellationToken);
+                    if (result != null)
+                    {
+                        lock (odds)
+                        {
+                            odds.Add(result);
+                        }
+                    }
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+
+            _logger.LogInformation("Successfully fetched odds for {Count} out of {Total} events", odds.Count, pairs.Count);
+
+            return odds;
         }
 
         #endregion
@@ -583,6 +670,104 @@ namespace ESPNScrape.Services
             }
         }
 
+        #endregion
+
+        #region Private Helper Methods
+
+        private static int GetMaxWeeksForSeasonType(int seasonType)
+        {
+            return seasonType switch
+            {
+                1 => 4,  // Preseason
+                2 => 18, // Regular season
+                3 => 5,  // Postseason
+                _ => 18  // Default to regular season
+            };
+        }
+
+        private static int GetNflSeasonYear(DateTime date)
+        {
+            // NFL season typically starts in September and ends in February of the following year
+            // If it's January-July, it's still considered the previous season
+            return date.Month <= 7 ? date.Year - 1 : date.Year;
+        }
+
+        private static (int seasonType, int weekNumber) CalculateCurrentWeek(DateTime currentDate, int nflYear)
+        {
+            // For September 19, 2025, we're clearly in regular season
+            // This is a simplified calculation - in a real implementation, 
+            // you'd want to use actual NFL schedule data
+
+            // September 19th, 2025 should be around Week 3 of regular season
+            if (currentDate.Month == 9 && currentDate.Day >= 1)
+            {
+                // Regular season - Week 3 is reasonable for mid-September
+                return (2, 3);
+            }
+
+            var seasonStart = new DateTime(nflYear, 9, 1); // Approximate season start
+
+            if (currentDate < seasonStart)
+            {
+                // Preseason
+                var preseasonStart = new DateTime(nflYear, 8, 1);
+                var weeksSincePreseason = (int)((currentDate - preseasonStart).Days / 7) + 1;
+                return (1, Math.Max(1, Math.Min(4, weeksSincePreseason)));
+            }
+
+            var regularSeasonStart = new DateTime(nflYear, 9, 7); // Approximate
+            if (currentDate < regularSeasonStart.AddDays(18 * 7))
+            {
+                // Regular season
+                var weeksSinceRegular = (int)((currentDate - regularSeasonStart).Days / 7) + 1;
+                return (2, Math.Max(1, Math.Min(18, weeksSinceRegular)));
+            }
+
+            // Postseason
+            var postseasonStart = regularSeasonStart.AddDays(18 * 7);
+            var weeksSincePostseason = (int)((currentDate - postseasonStart).Days / 7) + 1;
+            return (3, Math.Max(1, Math.Min(5, weeksSincePostseason)));
+        }
+
+        private static (int seasonType, int weekNumber) CalculateWeekFromDate(DateTime date, int nflYear)
+        {
+            return CalculateCurrentWeek(date, nflYear);
+        }
+
+        private static IEnumerable<PlayerStats> ExtractPlayerStatsFromBoxScore(BoxScore boxScore)
+        {
+            try
+            {
+                if (boxScore?.Players == null || !boxScore.Players.Any())
+                {
+                    return Enumerable.Empty<PlayerStats>();
+                }
+
+                // The BoxScore already contains parsed PlayerStats, so we can return them directly
+                // Filter out any null or invalid entries and ensure game context
+                var validPlayerStats = boxScore.Players
+                    .Where(ps => ps != null && !string.IsNullOrEmpty(ps.PlayerId))
+                    .Select(ps =>
+                    {
+                        // Ensure the player stats have game context information
+                        if (string.IsNullOrEmpty(ps.GameId))
+                        {
+                            ps.GameId = boxScore.GameId;
+                        }
+
+                        return ps;
+                    })
+                    .ToList();
+
+                return validPlayerStats;
+            }
+            catch (Exception)
+            {
+                // Return empty collection to allow processing to continue
+                return Enumerable.Empty<PlayerStats>();
+            }
+        }
+
         private Models.Player? MapEspnAthleteToPlayer(EspnAthlete athlete, string? teamId)
         {
             if (athlete == null) return null;
@@ -616,8 +801,22 @@ namespace ESPNScrape.Services
             }
         }
 
+        private void ValidateParameters(int year, int week, int seasonType)
+        {
+            if (year < 2000 || year > DateTime.Now.Year + 1)
+                throw new ArgumentException($"Invalid year: {year}");
+
+            if (week < 1 || week > 22)
+                throw new ArgumentException($"Invalid week: {week}");
+
+            if (seasonType < 1 || seasonType > 4)
+                throw new ArgumentException($"Invalid season type: {seasonType}");
+        }
+
         #endregion
     }
+
+    #region Helper Response Models
 
     // Helper response model for teams API
     public class TeamsResponse
@@ -643,4 +842,6 @@ namespace ESPNScrape.Services
         [JsonPropertyName("$ref")]
         public string Ref { get; set; } = string.Empty;
     }
+
+    #endregion
 }
