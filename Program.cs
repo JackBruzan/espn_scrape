@@ -50,7 +50,7 @@ try
     builder.Services.Configure<SyncOptions>(builder.Configuration.GetSection("DataSync"));
 
     // Register database service  
-    builder.Services.AddScoped<ISupabaseDatabaseService, SupabaseDatabaseService>();
+    builder.Services.AddSingleton<ISupabaseDatabaseService, SupabaseDatabaseService>();
 
     // Register combined scraping service (includes image download)
     builder.Services.AddSingleton<ESPNScrape.Services.DataOperations.EspnScrapingService>();
@@ -73,11 +73,11 @@ try
         client.Timeout = TimeSpan.FromSeconds(30); // Default timeout, will be overridden by resilience config
     });
 
-    // Register combined ESPN Data Retrieval Service (includes Scoreboard, BoxScore, Schedule)
-    builder.Services.AddScoped<EspnDataRetrievalService>();
-    builder.Services.AddScoped<IEspnScoreboardService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
-    builder.Services.AddScoped<IEspnBoxScoreService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
-    builder.Services.AddScoped<IEspnScheduleService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
+    // Register combined ESPN Data Retrieval Service (includes Scoreboard, BoxScore, Schedule) - CHANGED TO SINGLETON FOR QUARTZ COMPATIBILITY
+    builder.Services.AddSingleton<EspnDataRetrievalService>();
+    builder.Services.AddSingleton<IEspnScoreboardService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
+    builder.Services.AddSingleton<IEspnBoxScoreService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
+    builder.Services.AddSingleton<IEspnScheduleService>(provider => provider.GetRequiredService<EspnDataRetrievalService>());
 
     // Add memory cache for response caching
     builder.Services.AddMemoryCache(options =>
@@ -87,28 +87,28 @@ try
 
 
 
-    // Register Data Operations Services
-    builder.Services.AddScoped<IEspnPlayerStatsService, EspnPlayerStatsService>();
-    builder.Services.AddScoped<IEspnBulkOperationsService, EspnBulkOperationsService>();
-    builder.Services.AddScoped<IEspnDataSyncService, EspnDataSyncService>();
+    // Register Data Operations Services - CHANGED TO SINGLETON FOR QUARTZ COMPATIBILITY
+    builder.Services.AddSingleton<IEspnPlayerStatsService, EspnPlayerStatsService>();
+    builder.Services.AddSingleton<IEspnBulkOperationsService, EspnBulkOperationsService>();
+    builder.Services.AddSingleton<IEspnDataSyncService, EspnDataSyncService>();
 
-    // Register Data Processing Services  
-    builder.Services.AddScoped<IEspnPlayerMatchingService, EspnPlayerMatchingService>();
-    builder.Services.AddScoped<IEspnStatsTransformationService, EspnStatsTransformationService>();
+    // Register Data Processing Services - CHANGED TO SINGLETON FOR QUARTZ COMPATIBILITY  
+    builder.Services.AddSingleton<IEspnPlayerMatchingService, EspnPlayerMatchingService>();
+    builder.Services.AddSingleton<IEspnStatsTransformationService, EspnStatsTransformationService>();
 
     // Register combined infrastructure service (replaces logging, metrics, alerting)
     builder.Services.AddSingleton<EspnInfrastructureService>();
-    builder.Services.AddSingleton<IEspnLoggingService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
-    builder.Services.AddSingleton<IEspnMetricsService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
-    builder.Services.AddSingleton<IEspnAlertingService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
+    builder.Services.AddSingleton<ESPNScrape.Services.Interfaces.IEspnLoggingService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
+    builder.Services.AddSingleton<ESPNScrape.Services.Interfaces.IEspnMetricsService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
+    builder.Services.AddSingleton<ESPNScrape.Services.Interfaces.IEspnAlertingService>(provider => provider.GetRequiredService<EspnInfrastructureService>());
 
-    // Register combined ESPN API Service (includes Core API functionality)
-    builder.Services.AddScoped<EspnApiService>();
-    builder.Services.AddScoped<IEspnApiService>(provider => provider.GetRequiredService<EspnApiService>());
-    builder.Services.AddScoped<IEspnCoreApiService>(provider => provider.GetRequiredService<EspnApiService>());
+    // Register combined ESPN API Service (includes Core API functionality) - CHANGED TO SINGLETON FOR QUARTZ COMPATIBILITY
+    builder.Services.AddSingleton<EspnApiService>();
+    builder.Services.AddSingleton<IEspnApiService>(provider => provider.GetRequiredService<EspnApiService>());
+    builder.Services.AddSingleton<IEspnCoreApiService>(provider => provider.GetRequiredService<EspnApiService>());
 
-    // Register ESPN Data Mapping Service (combined mapping functionality)
-    builder.Services.AddScoped<EspnDataMappingService>();
+    // Register ESPN Data Mapping Service (combined mapping functionality) - CHANGED TO SINGLETON FOR QUARTZ COMPATIBILITY
+    builder.Services.AddSingleton<EspnDataMappingService>();
 
     // Add ASP.NET Core services for diagnostic endpoints
     builder.Services.AddControllers();
@@ -123,105 +123,81 @@ try
     // Add Quartz
     builder.Services.AddQuartz(q =>
     {
-        // Create a "key" for the ESPN Player Sync job
-        var playerSyncJobKey = new JobKey("EspnPlayerSyncJob");
+        // Stats sync job - every second for testing
+        q.AddJob<EspnStatsSyncJob>(j => j
+            .WithIdentity("EspnStatsSyncJob")
+            .StoreDurably());
 
-        // Register the ESPN Player Sync job with the DI container
-        q.AddJob<EspnPlayerSyncJob>(opts => opts
-            .WithIdentity(playerSyncJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
+        q.AddTrigger(t => t
+            .WithIdentity("EspnStatsSyncJob-trigger")
+            .ForJob("EspnStatsSyncJob")
+            .WithSimpleSchedule(s => s
+                .WithIntervalInSeconds(1)
+                .RepeatForever())
+            .StartNow());
 
-        // Player sync daily at 2:30 AM Eastern (7:30 AM UTC)
-        q.AddTrigger(opts => opts
-            .ForJob(playerSyncJobKey)
-            .WithIdentity("EspnPlayerSyncJob-trigger")
-            .WithCronSchedule("0 30 7 * * ?") // Daily at 7:30 AM UTC (2:30 AM EST)
-            .WithDescription("ESPN Player sync - Daily at 2:30 AM EST"));
+        // API scraping job - every 15 minutes
+        q.AddJob<EspnApiScrapingJob>(j => j
+            .WithIdentity("EspnApiScrapingJob")
+            .StoreDurably());
 
-        // Create a "key" for the ESPN Image Scraping job  
-        var imageScrapeJobKey = new JobKey("EspnImageScrapingJob");
-
-        // Register the ESPN Image Scraping job with the DI container
-        q.AddJob<ESPNImageScrapingJob>(opts => opts
-            .WithIdentity(imageScrapeJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
-
-        // Image sync daily at 3:00 AM Eastern (8:00 AM UTC) - after player sync
-        q.AddTrigger(opts => opts
-            .ForJob(imageScrapeJobKey)
-            .WithIdentity("EspnImageScrapingJob-trigger")
-            .WithCronSchedule("0 0 8 * * ?") // Daily at 8:00 AM UTC (3:00 AM EST)
-            .WithDescription("ESPN Image scraping - Daily at 3:00 AM EST"));
-
-        // Create a "key" for the ESPN API Scraping job
-        var apiScrapeJobKey = new JobKey("EspnApiScrapingJob");
-
-        // Register the ESPN API Scraping job with the DI container
-        q.AddJob<EspnApiScrapingJob>(opts => opts
-            .WithIdentity(apiScrapeJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
-
-        // API scraping every 15 minutes during season
-        q.AddTrigger(opts => opts
-            .ForJob(apiScrapeJobKey)
+        q.AddTrigger(t => t
             .WithIdentity("EspnApiScrapingJob-trigger")
-            .WithCronSchedule("0 */15 * * * ?") // Every 15 minutes
+            .ForJob("EspnApiScrapingJob")
+            .WithCronSchedule("0 */15 * * * ?")
             .WithDescription("ESPN API scraping - Every 15 minutes"));
 
-        // Create a "key" for the ESPN Stats Sync job
-        var statsSyncJobKey = new JobKey("EspnStatsSyncJob");
+        // Player sync job - daily at 2:30 AM EST
+        q.AddJob<EspnPlayerSyncJob>(j => j
+            .WithIdentity("EspnPlayerSyncJob")
+            .StoreDurably());
 
-        // Register the ESPN Stats Sync job with the DI container
-        q.AddJob<EspnStatsSyncJob>(opts => opts
-            .WithIdentity(statsSyncJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
+        q.AddTrigger(t => t
+            .WithIdentity("EspnPlayerSyncJob-trigger")
+            .ForJob("EspnPlayerSyncJob")
+            .WithCronSchedule("0 30 7 * * ?")
+            .WithDescription("ESPN Player sync - Daily at 2:30 AM EST"));
 
-        // Stats sync hourly during season
-        q.AddTrigger(opts => opts
-            .ForJob(statsSyncJobKey)
-            .WithIdentity("EspnStatsSyncJob-trigger")
-            .WithCronSchedule("0 0 * * * ?") // Every hour
-            .WithDescription("ESPN Stats sync - Hourly"));
+        // Image scraping job - daily at 3:00 AM EST
+        q.AddJob<ESPNImageScrapingJob>(j => j
+            .WithIdentity("EspnImageScrapingJob")
+            .StoreDurably());
 
-        // Create a "key" for the ESPN Historical Data job
-        var historicalDataJobKey = new JobKey("EspnHistoricalDataJob");
+        q.AddTrigger(t => t
+            .WithIdentity("EspnImageScrapingJob-trigger")
+            .ForJob("EspnImageScrapingJob")
+            .WithCronSchedule("0 0 8 * * ?")
+            .WithDescription("ESPN Image scraping - Daily at 3:00 AM EST"));
 
-        // Register the ESPN Historical Data job with the DI container
-        q.AddJob<EspnHistoricalDataJob>(opts => opts
-            .WithIdentity(historicalDataJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
+        // Historical data job - weekly on Sundays at 4:00 AM EST
+        q.AddJob<EspnHistoricalDataJob>(j => j
+            .WithIdentity("EspnHistoricalDataJob")
+            .StoreDurably());
 
-        // Historical data sync weekly on Sundays at 4:00 AM Eastern (9:00 AM UTC)
-        q.AddTrigger(opts => opts
-            .ForJob(historicalDataJobKey)
+        q.AddTrigger(t => t
             .WithIdentity("EspnHistoricalDataJob-trigger")
-            .WithCronSchedule("0 0 9 ? * SUN") // Weekly on Sunday at 9:00 AM UTC (4:00 AM EST)
+            .ForJob("EspnHistoricalDataJob")
+            .WithCronSchedule("0 0 9 ? * SUN")
             .WithDescription("ESPN Historical data sync - Weekly on Sunday at 4:00 AM EST"));
 
-        // Create a "key" for the ESPN Schedule Scraping job
-        var scheduleScrapeJobKey = new JobKey("EspnScheduleScrapingJob");
+        // Schedule scraping job - daily at 1:00 AM EST
+        q.AddJob<EspnScheduleScrapingJob>(j => j
+            .WithIdentity("EspnScheduleScrapingJob")
+            .StoreDurably());
 
-        // Register the ESPN Schedule Scraping job with the DI container
-        q.AddJob<EspnScheduleScrapingJob>(opts => opts
-            .WithIdentity(scheduleScrapeJobKey)
-            .DisallowConcurrentExecution() // Prevent concurrent execution
-            .StoreDurably()); // Allow job to exist without triggers during off-season
-
-        // Schedule scraping daily at 1:00 AM Eastern (6:00 AM UTC)
-        q.AddTrigger(opts => opts
-            .ForJob(scheduleScrapeJobKey)
+        q.AddTrigger(t => t
             .WithIdentity("EspnScheduleScrapingJob-trigger")
-            .WithCronSchedule("0 0 6 * * ?") // Daily at 6:00 AM UTC (1:00 AM EST)
+            .ForJob("EspnScheduleScrapingJob")
+            .WithCronSchedule("0 0 6 * * ?")
             .WithDescription("ESPN Schedule scraping - Daily at 1:00 AM EST"));
     });
 
     // Add Quartz hosted service
-    builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
+    builder.Services.AddQuartzHostedService(options =>
+    {
+        options.WaitForJobsToComplete = true;
+        options.AwaitApplicationStarted = true;
+    });
 
     var app = builder.Build();
 

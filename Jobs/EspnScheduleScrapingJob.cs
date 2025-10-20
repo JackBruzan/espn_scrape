@@ -37,13 +37,6 @@ public class EspnScheduleScrapingJob : IJob
         {
             _logger.LogInformation("Starting ESPN schedule scraping job {JobId} at {StartTime}", jobId, startTime);
 
-            // Check if we're in NFL season (September to February)
-            if (!IsNflSeason())
-            {
-                _logger.LogInformation("ESPN schedule scraping job {JobId} skipped - currently off-season", jobId);
-                return;
-            }
-
             // Get merged job data map (includes both job detail data and trigger data)
             var mergedJobData = context.MergedJobDataMap;
 
@@ -142,18 +135,6 @@ public class EspnScheduleScrapingJob : IJob
             // Re-throw to let Quartz handle the failure
             throw;
         }
-    }
-
-    /// <summary>
-    /// Determines if we're currently in NFL season (September through February)
-    /// </summary>
-    private bool IsNflSeason()
-    {
-        var now = DateTime.UtcNow;
-        var month = now.Month;
-
-        // NFL season runs from September through February (next year)
-        return month >= 9 || month <= 2;
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using ESPNScrape.Services;
+using ESPNScrape.Services.Interfaces;
 using Quartz;
 
 namespace ESPNScrape.Jobs;

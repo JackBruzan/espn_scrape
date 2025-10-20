@@ -4,7 +4,7 @@ using ESPNScrape.Models.Supabase;
 using ESPNScrape.Models.PlayerMatching;
 using ESPNScrape.Models.DataSync;
 
-namespace ESPNScrape.Services.DataProcessing.Interfaces
+namespace ESPNScrape.Services.Interfaces
 {
     /// <summary>
     /// Combined interface for Data Processing services

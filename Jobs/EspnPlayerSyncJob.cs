@@ -39,13 +39,6 @@ public class EspnPlayerSyncJob : IJob
         {
             _logger.LogInformation("Starting ESPN player sync job {JobId} at {StartTime}", jobId, startTime);
 
-            // Check if we're in NFL season
-            if (!IsNflSeason())
-            {
-                _logger.LogInformation("ESPN player sync job {JobId} skipped - currently off-season", jobId);
-                return;
-            }
-
             // Prevent overlapping executions
             if (!CanExecute(jobId))
             {
@@ -163,37 +156,6 @@ public class EspnPlayerSyncJob : IJob
                 _logger.LogInformation("Sync warning: {Warning}", warning);
             }
         }
-    }
-
-    /// <summary>
-    /// Determines if we're currently in NFL season
-    /// </summary>
-    private bool IsNflSeason()
-    {
-        var now = DateTime.Now;
-
-        // NFL season typically runs from August through February of the following year
-        if (now.Month >= 8 && now.Month <= 12)
-        {
-            // August through December of current year
-            return true;
-        }
-        else if (now.Month >= 1 && now.Month <= 2)
-        {
-            // January and February (postseason)
-            return true;
-        }
-
-        // Override for testing or manual execution
-        var forceExecutionConfig = _configuration["Job:ForceExecution"];
-        var forceExecution = bool.TryParse(forceExecutionConfig, out var force) && force;
-        if (forceExecution)
-        {
-            _logger.LogInformation("Forcing job execution due to configuration setting");
-            return true;
-        }
-
-        return false;
     }
 
     /// <summary>

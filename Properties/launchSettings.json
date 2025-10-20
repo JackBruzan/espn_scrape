@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "ESPNScrape": {
+      "commandName": "Project",
+      "launchBrowser": false,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:60771;http://localhost:60772"
+    }
+  }
+}

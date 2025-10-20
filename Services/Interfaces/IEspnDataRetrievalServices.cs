@@ -1,7 +1,7 @@
 using ESPNScrape.Models;
 using ESPNScrape.Models.Espn;
 
-namespace ESPNScrape.Services.DataRetrieval.Interfaces
+namespace ESPNScrape.Services.Interfaces
 {
     /// <summary>
     /// Combined interface for Data Retrieval services

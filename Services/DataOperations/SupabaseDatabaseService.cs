@@ -1,36 +1,11 @@
 using ESPNScrape.Models.Supabase;
 using ESPNScrape.Models.DataSync;
+using ESPNScrape.Services.Interfaces;
 using Microsoft.Extensions.Options;
 using Supabase;
 using System.Text.Json;
 
-namespace ESPNScrape.Services;
-
-public interface ISupabaseDatabaseService
-{
-    Task<long?> FindPlayerByEspnIdAsync(string espnId, CancellationToken cancellationToken = default);
-    Task<(long? PlayerId, string? Name)> FindMatchingPlayerAsync(Models.Player espnPlayer, CancellationToken cancellationToken = default);
-    Task<bool> AddPlayerAsync(Models.Player espnPlayer, CancellationToken cancellationToken = default);
-    Task<bool> UpdatePlayerAsync(long playerId, Models.Player espnPlayer, CancellationToken cancellationToken = default);
-    Task<long?> FindTeamIdByAbbreviationAsync(string abbreviation, CancellationToken cancellationToken = default);
-    Task<long?> FindPositionIdByNameAsync(string positionName, CancellationToken cancellationToken = default);
-
-    // Player stats operations
-    Task<bool> SavePlayerStatsAsync(PlayerStatsRecord playerStats, CancellationToken cancellationToken = default);
-    Task<bool> UpsertPlayerStatsAsync(PlayerStatsRecord playerStats, CancellationToken cancellationToken = default);
-    Task<int> UpsertPlayerStatsBatchAsync(List<PlayerStatsRecord> playerStatsList, CancellationToken cancellationToken = default);
-    Task<List<PlayerStatsRecord>> GetPlayerStatsAsync(long playerId, int? season = null, int? week = null, CancellationToken cancellationToken = default);
-
-    // Sync operations
-    Task<bool> SaveSyncReportAsync(SyncResult syncResult, CancellationToken cancellationToken = default);
-    Task<SyncReport?> GetLastSyncReportAsync(SyncType? syncType = null, CancellationToken cancellationToken = default);
-    Task<List<SyncReport>> GetSyncHistoryAsync(int limit = 50, SyncType? syncType = null, CancellationToken cancellationToken = default);
-    Task<SyncMetrics> GetSyncMetricsAsync(DateTime? fromDate = null, DateTime? toDate = null, CancellationToken cancellationToken = default);
-    Task UpdateSyncMetricsAsync(DateTime date, SyncResult syncResult, CancellationToken cancellationToken = default);
-
-    // Schedule operations
-    Task<bool> SaveScheduleAsync(ScheduleRecord schedule, CancellationToken cancellationToken = default);
-}
+namespace ESPNScrape.Services.DataOperations;
 
 public class SupabaseConfiguration
 {

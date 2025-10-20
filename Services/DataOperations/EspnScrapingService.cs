@@ -1,4 +1,5 @@
 using ESPNScrape.Models;
+using ESPNScrape.Services.Interfaces;
 using System.Text.Json;
 
 namespace ESPNScrape.Services.DataOperations;

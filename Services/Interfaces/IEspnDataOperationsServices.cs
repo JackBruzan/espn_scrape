@@ -3,7 +3,7 @@ using ESPNScrape.Models.Espn;
 using ESPNScrape.Models.Supabase;
 using ESPNScrape.Models.DataSync;
 
-namespace ESPNScrape.Services.DataOperations.Interfaces
+namespace ESPNScrape.Services.Interfaces
 {
     /// <summary>
     /// Combined interface for Data Operations services
@@ -313,19 +313,6 @@ namespace ESPNScrape.Services.DataOperations.Interfaces
         Task<List<Player>> GetActivePlayersAsync();
         Task DownloadPlayerImageAsync(string playerId, string playerName);
     }
-
-    /// <summary>
-    /// Image download service interface
-    /// </summary>
-    public interface IImageDownloadService
-    {
-        Task<bool> DownloadImageAsync(string url, string filePath);
-        Task<byte[]> GetImageBytesAsync(string url);
-        Task<string> SaveImageAsync(byte[] imageData, string fileName);
-        Task<bool> ImageExistsAsync(string filePath);
-    }
-
-
 
     /// <summary>
     /// Supabase database service interface for ESPN data persistence

@@ -2,8 +2,9 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ESPNScrape.Models.DataSync;
 using Microsoft.Extensions.Logging;
 using ESPNScrape.Configuration;
+using ESPNScrape.Services.Infrastructure;
 
-namespace ESPNScrape.Services.Infrastructure.Interfaces
+namespace ESPNScrape.Services.Interfaces
 {
     /// <summary>
     /// Enhanced logging service with structured logging, correlation IDs, and performance tracking
@@ -318,4 +319,6 @@ namespace ESPNScrape.Services.Infrastructure.Interfaces
         Task<bool> DownloadImageAsync(string imageUrl, string fileName, string directory);
         Task<string> EnsureDirectoryExistsAsync(string directory);
     }
+
+
 }
