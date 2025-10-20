@@ -56,3 +56,4 @@ nunit-*.xml
 # Downloaded content
 downloads/
 data/*
+/.vs/espn_scrape
